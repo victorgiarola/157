@@ -1,44 +1,31 @@
-# 📦 Minerador Mercado Livre PRO (Tendências & Mais Vendidos)
+# 📦 Minerador Mercado Livre PRO & Robô de Afiliados (WhatsApp)
 
-Painel inteligente de mineração de produtos mais vendidos no Mercado Livre Brasil em tempo real, com cálculo automático de margem de lucro líquido para revenda e busca instantânea de fornecedores.
+Painel inteligente de mineração de ofertas reais do Mercado Livre Brasil com **Robô de Automação para Grupos de WhatsApp** integrado, utilizando **delays humanizados anti-ban**.
 
 ---
 
-## 🌟 Funcionalidades
+## 🌟 Principais Recursos
 
-* **Mineração em Tempo Real**: Extrai diretamente os produtos do ranking oficial de Mais Vendidos do Mercado Livre Brasil com posições (#1, #2, #3...).
-* **Categorias Mapeadas**:
-  * Geral (Todos os mais vendidos)
-  * Informática & Acessórios
-  * Celulares e Telefones
-  * Eletrônicos, Áudio e Vídeo
-  * Casa, Móveis e Decoração
-  * Beleza e Cuidado Pessoal
-  * Ferramentas e Construção
-  * Acessórios para Veículos
-  * Games e Consoles
-  * Esportes e Fitness
-* **Calculadora Dinâmica de Margem & Lucro**:
-  * Insira o custo de compra no fornecedor diretamente no card do produto.
-  * O sistema calcula instantaneamente a taxa do Mercado Livre (~12%), a taxa fixa para itens abaixo de R$ 79, e exibe o **Lucro Líquido Real (R$)** e a **Margem Percentual (%)**.
-  * Classificação automática por cores (Alta Margem, Boa Margem, Margem Baixa).
-* **Filtros Avançados**:
-  * Filtro por palavra-chave instantâneo (ex: fone, smartwatch, suporte, kit).
-  * Filtro por margem mínima (ex: apenas produtos com mais de 35% de margem).
-* **Localizador de Fornecedores com 1 Clique**:
-  * Botão direto para buscar o mesmo produto no atacado da Shopee, AliExpress ou fornecedores nacionais.
-* **Exportação para Excel/CSV**:
-  * Baixe uma planilha completa pronta com todos os produtos minerados, links, preços e estimativas de lucro.
+### 1. Radar de Ofertas Reais (Até 80% OFF)
+* Puxa em tempo real promoções ativas com descontos reais verificados (30%, 50%, 67% OFF).
+* Detecção de preço anterior, preço atual, avaliação do vendedor, número de vendas e selo FULL.
+* Gerador de copy chamativa para WhatsApp com 1 clique.
+
+### 2. Robô Disparador Automático para WhatsApp
+* **Conexão por QR Code**: Conecte o seu WhatsApp diretamente pelo painel (escaneando com o celular). A sessão fica salva no seu computador.
+* **Seletor de Grupos**: Carrega a lista dos seus grupos do WhatsApp automaticamente em um menu dropdown.
+* **Delays Aleatórios Anti-Ban**: O robô alterna os envios entre os minutos configurados:
+  `3, 5, 7, 9, 12, 15, 25` minutos (ou o intervalo que você desejar).
+* **Filtro de Desconto Mínimo**: Configure para disparar apenas ofertas acima de 20%, 30%, 40% ou 50% OFF.
+* **Histórico sem Repetições**: Não envia o mesmo produto duas vezes no mesmo dia.
+* **Contagem Regressiva em Tempo Real**: Veja exatamente quanto tempo falta para o próximo disparo.
 
 ---
 
 ## 🚀 Como Iniciar
 
-Dê dois cliques no arquivo:
-👉 **`iniciar-minerador.bat`** (na pasta raiz do projeto)
-
-Ou via terminal dentro desta pasta:
-```bash
-npm run dev
-```
-E acesse no navegador: **http://localhost:5173**
+1. Dê dois cliques em **`iniciar-minerador.bat`** na pasta raiz do projeto.
+2. O painel abrirá no navegador em: **http://localhost:5173**
+3. Clique na aba **"🤖 Robô WhatsApp"**.
+4. Clique em **"Conectar WhatsApp"** e aponte a câmera do seu celular para o QR Code.
+5. Selecione o seu grupo de ofertas no menu, confira os minutos de intervalo e clique em **"▶ INICIAR AUTOMAÇÃO NO GRUPO"**!
