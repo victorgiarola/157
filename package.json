@@ -1,0 +1,22 @@
+{
+  "name": "huntera-multi-client",
+  "version": "1.0.0",
+  "description": "Painel Multi-Contas para Huntera (Tibia Idle) com sessões persistentes e isolamento de cookies",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "keywords": [
+    "huntera",
+    "tibia",
+    "idle",
+    "multi-client",
+    "electron"
+  ],
+  "author": "victorgiarola",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.2.0"
+  }
+}

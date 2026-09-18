@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Huntera Multi-Client (4 Contas)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- BARRA DE FERRAMENTAS SUPERIOR -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon">⚔️</div>
+      <div class="brand-info">
+        <h1>HUNTERA</h1>
+        <span class="sub-badge">MULTI-CLIENT 4X</span>
+      </div>
+    </div>
+
+    <!-- SELETOR DE MODOS / ABAS -->
+    <nav class="layout-nav">
+      <button class="nav-btn active" data-mode="grid" id="btn-mode-grid" title="Exibir todas as 4 contas em grade (Ctrl+0)">
+        <span class="icon">⊞</span> Grade 2x2
+      </button>
+      <div class="nav-divider"></div>
+      <button class="nav-btn" data-mode="focus" data-target="1" id="btn-focus-1" title="Focar na Conta 1 (Ctrl+1)">
+        <span class="badge-num">1</span> <span class="slot-nav-name" id="nav-label-1">Knight</span>
+      </button>
+      <button class="nav-btn" data-mode="focus" data-target="2" id="btn-focus-2" title="Focar na Conta 2 (Ctrl+2)">
+        <span class="badge-num">2</span> <span class="slot-nav-name" id="nav-label-2">Paladin</span>
+      </button>
+      <button class="nav-btn" data-mode="focus" data-target="3" id="btn-focus-3" title="Focar na Conta 3 (Ctrl+3)">
+        <span class="badge-num">3</span> <span class="slot-nav-name" id="nav-label-3">Sorcerer</span>
+      </button>
+      <button class="nav-btn" data-mode="focus" data-target="4" id="btn-focus-4" title="Focar na Conta 4 (Ctrl+4)">
+        <span class="badge-num">4</span> <span class="slot-nav-name" id="nav-label-4">Druid</span>
+      </button>
+    </nav>
+
+    <!-- AÇÕES GLOBAIS -->
+    <div class="global-actions">
+      <button class="action-btn" id="btn-reload-all" title="Recarregar todas as 4 contas (Ctrl+Shift+R)">
+        <span class="icon">🔄</span> Recarregar Todas
+      </button>
+      <button class="action-btn" id="btn-mute-all" title="Silenciar/Ativar áudio de todas as contas">
+        <span class="icon" id="mute-all-icon">🔊</span> Som
+      </button>
+      <div class="status-indicator" title="Anti-Throttling ativo: abas não congelam em segundo plano">
+        <span class="status-dot"></span>
+        <span class="status-text">Anti-AFK Ativo</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- CONTAINER PRINCIPAL: GRADE 2x2 OU FOCO -->
+  <main class="grid-container mode-grid" id="main-container">
+    
+    <!-- CONTA 1 -->
+    <section class="slot-card" id="slot-1" data-index="1">
+      <div class="slot-header">
+        <div class="slot-title">
+          <span class="slot-id">#1</span>
+          <input type="text" class="slot-name-input" id="name-input-1" value="Knight" maxlength="20" title="Clique para renomear" />
+          <span class="status-pill" id="status-1"><span class="dot"></span> Online</span>
+        </div>
+        <div class="slot-tools">
+          <button class="tool-btn btn-zoom-out" data-slot="1" title="Diminuir Zoom">A-</button>
+          <span class="zoom-level" id="zoom-label-1">100%</span>
+          <button class="tool-btn btn-zoom-in" data-slot="1" title="Aumentar Zoom">A+</button>
+          <button class="tool-btn btn-mute" data-slot="1" id="mute-btn-1" title="Silenciar esta conta">🔊</button>
+          <button class="tool-btn btn-reload" data-slot="1" title="Recarregar esta conta">🔄</button>
+          <button class="tool-btn btn-expand" data-slot="1" title="Alternar Tela Cheia/Grade">⛶</button>
+        </div>
+      </div>
+      <div class="webview-wrapper">
+        <div class="loading-overlay" id="loader-1">
+          <div class="spinner"></div>
+          <span>Carregando Huntera #1...</span>
+        </div>
+        <webview id="webview-1" partition="persist:huntera_account_1" src="https://huntera.com.br" allowpopups></webview>
+      </div>
+    </section>
+
+    <!-- CONTA 2 -->
+    <section class="slot-card" id="slot-2" data-index="2">
+      <div class="slot-header">
+        <div class="slot-title">
+          <span class="slot-id">#2</span>
+          <input type="text" class="slot-name-input" id="name-input-2" value="Paladin" maxlength="20" title="Clique para renomear" />
+          <span class="status-pill" id="status-2"><span class="dot"></span> Online</span>
+        </div>
+        <div class="slot-tools">
+          <button class="tool-btn btn-zoom-out" data-slot="2" title="Diminuir Zoom">A-</button>
+          <span class="zoom-level" id="zoom-label-2">100%</span>
+          <button class="tool-btn btn-zoom-in" data-slot="2" title="Aumentar Zoom">A+</button>
+          <button class="tool-btn btn-mute" data-slot="2" id="mute-btn-2" title="Silenciar esta conta">🔊</button>
+          <button class="tool-btn btn-reload" data-slot="2" title="Recarregar esta conta">🔄</button>
+          <button class="tool-btn btn-expand" data-slot="2" title="Alternar Tela Cheia/Grade">⛶</button>
+        </div>
+      </div>
+      <div class="webview-wrapper">
+        <div class="loading-overlay" id="loader-2">
+          <div class="spinner"></div>
+          <span>Carregando Huntera #2...</span>
+        </div>
+        <webview id="webview-2" partition="persist:huntera_account_2" src="https://huntera.com.br" allowpopups></webview>
+      </div>
+    </section>
+
+    <!-- CONTA 3 -->
+    <section class="slot-card" id="slot-3" data-index="3">
+      <div class="slot-header">
+        <div class="slot-title">
+          <span class="slot-id">#3</span>
+          <input type="text" class="slot-name-input" id="name-input-3" value="Sorcerer" maxlength="20" title="Clique para renomear" />
+          <span class="status-pill" id="status-3"><span class="dot"></span> Online</span>
+        </div>
+        <div class="slot-tools">
+          <button class="tool-btn btn-zoom-out" data-slot="3" title="Diminuir Zoom">A-</button>
+          <span class="zoom-level" id="zoom-label-3">100%</span>
+          <button class="tool-btn btn-zoom-in" data-slot="3" title="Aumentar Zoom">A+</button>
+          <button class="tool-btn btn-mute" data-slot="3" id="mute-btn-3" title="Silenciar esta conta">🔊</button>
+          <button class="tool-btn btn-reload" data-slot="3" title="Recarregar esta conta">🔄</button>
+          <button class="tool-btn btn-expand" data-slot="3" title="Alternar Tela Cheia/Grade">⛶</button>
+        </div>
+      </div>
+      <div class="webview-wrapper">
+        <div class="loading-overlay" id="loader-3">
+          <div class="spinner"></div>
+          <span>Carregando Huntera #3...</span>
+        </div>
+        <webview id="webview-3" partition="persist:huntera_account_3" src="https://huntera.com.br" allowpopups></webview>
+      </div>
+    </section>
+
+    <!-- CONTA 4 -->
+    <section class="slot-card" id="slot-4" data-index="4">
+      <div class="slot-header">
+        <div class="slot-title">
+          <span class="slot-id">#4</span>
+          <input type="text" class="slot-name-input" id="name-input-4" value="Druid" maxlength="20" title="Clique para renomear" />
+          <span class="status-pill" id="status-4"><span class="dot"></span> Online</span>
+        </div>
+        <div class="slot-tools">
+          <button class="tool-btn btn-zoom-out" data-slot="4" title="Diminuir Zoom">A-</button>
+          <span class="zoom-level" id="zoom-label-4">100%</span>
+          <button class="tool-btn btn-zoom-in" data-slot="4" title="Aumentar Zoom">A+</button>
+          <button class="tool-btn btn-mute" data-slot="4" id="mute-btn-4" title="Silenciar esta conta">🔊</button>
+          <button class="tool-btn btn-reload" data-slot="4" title="Recarregar esta conta">🔄</button>
+          <button class="tool-btn btn-expand" data-slot="4" title="Alternar Tela Cheia/Grade">⛶</button>
+        </div>
+      </div>
+      <div class="webview-wrapper">
+        <div class="loading-overlay" id="loader-4">
+          <div class="spinner"></div>
+          <span>Carregando Huntera #4...</span>
+        </div>
+        <webview id="webview-4" partition="persist:huntera_account_4" src="https://huntera.com.br" allowpopups></webview>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
