@@ -12,7 +12,7 @@ import cors from 'cors';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg;
+const { Client, LocalAuth, MessageMedia } = pkg;
 import QRCode from 'qrcode';
 import fs from 'fs';
 import path from 'path';
@@ -511,8 +511,55 @@ async function findGroup(query) {
   return null;
 }
 
-function formatAffiliateMessage(product, style, tag) {
-  let link = product.link;
+// Limpa URL do Mercado Livre removendo parâmetros poluídos
+function cleanMercadoLivreUrl(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    return `${u.origin}${u.pathname}`;
+  } catch (e) {
+    return url.split('?')[0];
+  }
+}
+
+// Encurtador de link via TinyURL (rápido, gratuito e sem cadastro)
+async function shortenUrl(longUrl) {
+  if (!longUrl) return '';
+  try {
+    const res = await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`, {
+      timeout: 5000
+    });
+    if (res.data && typeof res.data === 'string' && res.data.startsWith('http')) {
+      return res.data.trim();
+    }
+  } catch (err) {
+    console.warn('Aviso: Não foi possível encurtar via TinyURL, usando link limpo:', err.message);
+  }
+  return longUrl;
+}
+
+// Baixa a imagem do produto e prepara como MessageMedia para envio de foto no WhatsApp
+async function getProductMedia(imageUrl) {
+  if (!imageUrl) return null;
+  try {
+    const res = await axios.get(imageUrl, {
+      responseType: 'arraybuffer',
+      timeout: 8000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }
+    });
+    const contentType = res.headers['content-type'] || 'image/jpeg';
+    const base64Data = Buffer.from(res.data).toString('base64');
+    return new MessageMedia(contentType, base64Data, 'oferta.jpg');
+  } catch (err) {
+    console.warn('Aviso: Não foi possível baixar foto do produto para envio:', err.message);
+    return null;
+  }
+}
+
+async function formatAffiliateMessage(product, style, tag) {
+  let link = cleanMercadoLivreUrl(product.link);
   if (tag && tag.trim()) {
     if (tag.startsWith('http')) {
       link = tag.trim();
@@ -521,6 +568,9 @@ function formatAffiliateMessage(product, style, tag) {
       link = `${link}${sep}matt_tool=${encodeURIComponent(tag.trim())}`;
     }
   }
+
+  // Encurta o link para ficar pequeno e profissional
+  link = await shortenUrl(link);
 
   const shortTitle = product.title.length > 70 ? product.title.substring(0, 67) + '...' : product.title;
   const oldPriceStr = product.oldPriceFormatted ? `~${product.oldPriceFormatted}~` : `~R$ ${(product.price * 1.35).toFixed(2).replace('.', ',')}~`;
@@ -552,7 +602,7 @@ async function resolveTargetChat(groupId, groupName) {
       return {
         id: { _serialized: groupId },
         name: groupName || groupId,
-        sendMessage: (msg) => waClient.sendMessage(groupId, msg)
+        sendMessage: (content, opts) => waClient.sendMessage(groupId, content, opts)
       };
     }
   }
@@ -569,7 +619,7 @@ async function resolveTargetChat(groupId, groupName) {
         return {
           id: { _serialized: found.id },
           name: found.name,
-          sendMessage: (msg) => waClient.sendMessage(found.id, msg)
+          sendMessage: (content, opts) => waClient.sendMessage(found.id, content, opts)
         };
       }
     }
@@ -598,8 +648,14 @@ async function dispatchNextDeal() {
     });
 
     if (candidate) {
-      const message = formatAffiliateMessage(candidate, autoPostConfig.copyStyle, autoPostConfig.affiliateTag);
-      await targetChat.sendMessage(message);
+      const message = await formatAffiliateMessage(candidate, autoPostConfig.copyStyle, autoPostConfig.affiliateTag);
+      const media = await getProductMedia(candidate.img);
+
+      if (media) {
+        await targetChat.sendMessage(media, { caption: message });
+      } else {
+        await targetChat.sendMessage(message);
+      }
 
       postedProductsHistory.add(candidate.title);
       postLogs.unshift({
@@ -608,11 +664,11 @@ async function dispatchNextDeal() {
         price: candidate.priceFormatted,
         discount: candidate.discount,
         time: new Date().toLocaleTimeString('pt-BR'),
-        status: 'Enviado com Sucesso! ✅'
+        status: media ? 'Foto + Oferta Enviada! 📸✅' : 'Enviado com Sucesso! ✅'
       });
       if (postLogs.length > 50) postLogs.pop();
 
-      console.log(`🚀 [Auto-Post] Oferta enviada para "${targetChat.name}": ${candidate.title}`);
+      console.log(`🚀 [Auto-Post] Oferta com foto enviada para "${targetChat.name}": ${candidate.title}`);
     }
   } catch (err) {
     console.error('Erro ao disparar oferta automática:', err.message);
@@ -770,10 +826,21 @@ app.post('/api/whatsapp/send-test', async (req, res) => {
     }
 
     const sample = deals[0];
-    const message = formatAffiliateMessage(sample, copyStyle || 'urgencia', affiliateTag);
-    await targetChat.sendMessage(message);
+    const message = await formatAffiliateMessage(sample, copyStyle || 'urgencia', affiliateTag);
+    const media = await getProductMedia(sample.img);
 
-    res.json({ success: true, productTitle: sample.title, groupName: targetChat.name });
+    if (media) {
+      await targetChat.sendMessage(media, { caption: message });
+    } else {
+      await targetChat.sendMessage(message);
+    }
+
+    res.json({
+      success: true,
+      productTitle: sample.title,
+      groupName: targetChat.name,
+      hasImage: !!media
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

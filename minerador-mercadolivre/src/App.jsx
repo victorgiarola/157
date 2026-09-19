@@ -198,7 +198,7 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success) {
-        setTestFeedback(`✅ Oferta de teste enviada com sucesso para o grupo "${data.groupName}"!`);
+        setTestFeedback(`✅ Oferta de teste enviada com foto e link curto com sucesso para o grupo "${data.groupName}"! 📸🔗`);
       } else {
         setTestFeedback(`❌ Erro: ${data.error}`);
       }
@@ -283,10 +283,11 @@ export default function App() {
   }, [nextPostTimestamp, isAutoPosting]);
 
   const getAffiliateLink = (originalLink) => {
-    if (!affiliateTag.trim()) return originalLink;
+    const clean = originalLink ? originalLink.split('?')[0] : '';
+    if (!affiliateTag.trim()) return clean;
     if (affiliateTag.startsWith('http')) return affiliateTag;
-    const separator = originalLink.includes('?') ? '&' : '?';
-    return `${originalLink}${separator}matt_tool=${encodeURIComponent(affiliateTag)}`;
+    const separator = clean.includes('?') ? '&' : '?';
+    return `${clean}${separator}matt_tool=${encodeURIComponent(affiliateTag)}`;
   };
 
   const generateWhatsAppCopy = (product, style = copyStyle) => {
