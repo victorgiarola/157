@@ -318,40 +318,61 @@ function initWhatsAppClient() {
     waStatus = 'ready';
     qrCodeDataUrl = null;
 
-    // Proteção em nível de navegador para suprimir erros de memoização/getters em contas LID e mídias
+    // Proteção profunda em nível de navegador para suprimir erros de memoização/getters em contas LID e mídias
     try {
       if (waClient.pupPage) {
         await waClient.pupPage.evaluate(() => {
+          if (typeof window.WWebJS?.protectGetters === 'function') {
+            window.WWebJS.protectGetters();
+          }
+
+          const getterModules = [
+            'WAWebChatGetters',
+            'WAWebFrontendContactGetters',
+            'WAWebBusinessProfileGetters',
+            'WAWebMsgGetters',
+            'WAWebNewsletterMetadataGetters',
+            'WAWebContactGetters'
+          ];
+
+          for (const modName of getterModules) {
+            try {
+              const mod = window.require(modName);
+              if (!mod) continue;
+              for (const k of Object.keys(mod)) {
+                if (typeof mod[k] === 'function' && !mod[k].__shielded) {
+                  const orig = mod[k];
+                  const shielded = function(item) {
+                    if (item == null) return undefined;
+                    if (typeof item === 'object' && !item.id) {
+                      item.id = item._serialized || item.wid || item.key?.id || item.filehash || ('synthetic_' + Math.random().toString(36).slice(2, 9));
+                    }
+                    try {
+                      return orig.apply(this, arguments);
+                    } catch (e) {
+                      return undefined;
+                    }
+                  };
+                  shielded.__shielded = true;
+                  mod[k] = shielded;
+                }
+              }
+            } catch (e) {}
+          }
+
           try {
             const lidUtils = window.require('WAWebLidMigrationUtils');
-            if (lidUtils && typeof lidUtils.toPn === 'function') {
+            if (lidUtils && typeof lidUtils.toPn === 'function' && !lidUtils.toPn.__shielded) {
               const origToPn = lidUtils.toPn;
-              lidUtils.toPn = function(wid) {
+              const shieldedToPn = function(wid) {
                 try {
                   return origToPn.apply(this, arguments);
                 } catch (e) {
                   return wid;
                 }
               };
-            }
-          } catch (e) {}
-
-          try {
-            const contactGetters = window.require('WAWebContactGetters');
-            if (contactGetters) {
-              for (const k of Object.keys(contactGetters)) {
-                if (typeof contactGetters[k] === 'function') {
-                  const orig = contactGetters[k];
-                  contactGetters[k] = function(contact) {
-                    if (!contact) return false;
-                    try {
-                      return orig.apply(this, arguments);
-                    } catch (e) {
-                      return false;
-                    }
-                  };
-                }
-              }
+              shieldedToPn.__shielded = true;
+              lidUtils.toPn = shieldedToPn;
             }
           } catch (e) {}
         });
@@ -646,11 +667,23 @@ async function sendProductOffer(chatId, message, media) {
     throw new Error('WhatsApp não está pronto ou conectado.');
   }
 
+  // Assegura blindagem de getters antes de preparar o envio
+  if (waClient.pupPage) {
+    try {
+      await waClient.pupPage.evaluate(() => {
+        if (typeof window.WWebJS?.protectGetters === 'function') {
+          window.WWebJS.protectGetters();
+        }
+      });
+    } catch (e) {}
+  }
+
   // 1. Tenta envio com foto do produto primeiro
   if (media) {
     try {
       console.log(`📸 Tentando enviar oferta com foto para ${chatId}...`);
       await waClient.sendMessage(chatId, media, { caption: message });
+      console.log(`🎉 Oferta com FOTO enviada com sucesso para ${chatId}!`);
       return { success: true, hasImage: true };
     } catch (mediaErr) {
       console.warn(`⚠️ Envio de foto encontrou incompatibilidade interna do WhatsApp Web (${mediaErr.message}).`);
