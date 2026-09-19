@@ -575,31 +575,35 @@ async function findGroup(query) {
   return null;
 }
 
-// Limpa URL do Mercado Livre removendo parâmetros poluídos
+// Gera a URL mais curta e limpa oficial do Mercado Livre (ex: /p/MLB... ou produto.mercadolivre.com.br/MLB-...)
 function cleanMercadoLivreUrl(url) {
   if (!url) return '';
   try {
     const u = new URL(url);
+    // 1. Se for produto de catálogo /p/MLB...
+    const pMatch = u.pathname.match(/\/p\/(MLB\d+)/i);
+    if (pMatch) {
+      return `https://www.mercadolivre.com.br/p/${pMatch[1].toUpperCase()}`;
+    }
+
+    // 2. Se for produto padrão com código MLB-...
+    const mlbMatch = u.pathname.match(/(MLB-?\d+)/i);
+    if (mlbMatch) {
+      const cleanId = mlbMatch[1].toUpperCase();
+      return `https://produto.mercadolivre.com.br/${cleanId}`;
+    }
+
+    // 3. Fallback: URL limpa sem query strings poluídas
     return `${u.origin}${u.pathname}`;
   } catch (e) {
+    const match = url.match(/\/p\/(MLB\d+)/i) || url.match(/(MLB-?\d+)/i);
+    if (match) {
+      return match[1].toUpperCase().startsWith('MLB') && !match[1].includes('-')
+        ? `https://www.mercadolivre.com.br/p/${match[1].toUpperCase()}`
+        : `https://produto.mercadolivre.com.br/${match[1].toUpperCase()}`;
+    }
     return url.split('?')[0];
   }
-}
-
-// Encurtador de link via TinyURL (rápido, gratuito e sem cadastro)
-async function shortenUrl(longUrl) {
-  if (!longUrl) return '';
-  try {
-    const res = await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`, {
-      timeout: 5000
-    });
-    if (res.data && typeof res.data === 'string' && res.data.startsWith('http')) {
-      return res.data.trim();
-    }
-  } catch (err) {
-    console.warn('Aviso: Não foi possível encurtar via TinyURL, usando link limpo:', err.message);
-  }
-  return longUrl;
 }
 
 // Baixa a imagem do produto e prepara como MessageMedia para envio de foto no WhatsApp
@@ -640,9 +644,6 @@ async function formatAffiliateMessage(product, style, tag) {
       link = `${link}${sep}matt_tool=${encodeURIComponent(tag.trim())}`;
     }
   }
-
-  // Encurta o link para ficar pequeno e profissional
-  link = await shortenUrl(link);
 
   const shortTitle = product.title.length > 70 ? product.title.substring(0, 67) + '...' : product.title;
   const oldPriceStr = product.oldPriceFormatted ? `~${product.oldPriceFormatted}~` : `~R$ ${(product.price * 1.35).toFixed(2).replace('.', ',')}~`;
@@ -687,12 +688,16 @@ async function sendProductOffer(chatId, message, media) {
       return { success: true, hasImage: true };
     } catch (mediaErr) {
       console.warn(`⚠️ Envio de foto encontrou incompatibilidade interna do WhatsApp Web (${mediaErr.message}).`);
-      console.log(`📝 Entregando oferta com formato texto profissional e link curto para garantir o envio...`);
+      console.log(`📝 Entregando oferta com link oficial do Mercado Livre e preview enriquecido...`);
     }
   }
 
-  // 2. Envio do texto formatado (com emojis, desconto e link curto encurtado)
-  await waClient.sendMessage(chatId, message);
+  // 2. Envio do texto formatado com linkPreview ativo (renderiza o card com foto e título oficial do Mercado Livre)
+  try {
+    await waClient.sendMessage(chatId, message, { linkPreview: true });
+  } catch (e) {
+    await waClient.sendMessage(chatId, message);
+  }
   return { success: true, hasImage: false };
 }
 
