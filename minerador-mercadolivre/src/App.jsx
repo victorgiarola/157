@@ -600,8 +600,9 @@ export default function App() {
                     <QrCode size={16} /> Escaneie o QR Code Abaixo
                   </div>
                 ) : waStatus === 'authenticating' ? (
-                  <div style={{ color: '#9ca3af', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div className="spinner-lg" style={{ width: 16, height: 16, borderWidth: 2 }}></div> Inicializando WhatsApp...
+                  <div style={{ color: '#ffe600', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(255, 230, 0, 0.1)', padding: '8px 16px', borderRadius: 20, border: '1px solid rgba(255, 230, 0, 0.3)', fontWeight: 600 }}>
+                    <div className="spinner-lg" style={{ width: 14, height: 14, borderWidth: 2 }}></div>
+                    <span>Gerando QR Code (aguarde ~15s)...</span>
                   </div>
                 ) : (
                   <button
