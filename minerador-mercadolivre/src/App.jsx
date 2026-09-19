@@ -22,7 +22,8 @@ import {
   Radio,
   Sliders,
   CheckCircle2,
-  AlertCircle
+  Send,
+  HelpCircle
 } from 'lucide-react';
 
 const CATEGORIES = [
@@ -39,7 +40,7 @@ const CATEGORIES = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('radar'); // 'radar' | 'automacao'
+  const [activeTab, setActiveTab] = useState('radar');
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState('ofertas');
@@ -61,18 +62,21 @@ export default function App() {
   const [isAutoPosting, setIsAutoPosting] = useState(false);
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState('');
+  const [manualGroupName, setManualGroupName] = useState('');
+  const [loadingGroups, setLoadingGroups] = useState(false);
   const [delaysInput, setDelaysInput] = useState('3, 5, 7, 9, 12, 15, 25');
   const [minAutoDiscount, setMinAutoDiscount] = useState(25);
   const [nextPostTimestamp, setNextPostTimestamp] = useState(null);
   const [countdown, setCountdown] = useState('');
   const [postLogs, setPostLogs] = useState([]);
+  const [testSending, setTestSending] = useState(false);
+  const [testFeedback, setTestFeedback] = useState(null);
 
   const handleTagChange = (val) => {
     setAffiliateTag(val);
     localStorage.setItem('ml_affiliate_tag', val);
   };
 
-  // Buscar produtos da API local
   const fetchProducts = async (catId) => {
     setLoading(true);
     try {
@@ -88,7 +92,6 @@ export default function App() {
     }
   };
 
-  // Buscar status do WhatsApp
   const checkWaStatus = async () => {
     try {
       const res = await fetch('http://localhost:3001/api/whatsapp/status');
@@ -99,26 +102,29 @@ export default function App() {
       setNextPostTimestamp(data.nextPostTimestamp);
       setPostLogs(data.logs || []);
 
-      if (data.status === 'ready' && groups.length === 0) {
+      if (data.status === 'ready' && groups.length === 0 && !loadingGroups) {
         fetchGroups();
       }
     } catch (err) {
-      // Servidor ainda iniciando
+      // Servidor iniciando
     }
   };
 
   const fetchGroups = async () => {
+    setLoadingGroups(true);
     try {
       const res = await fetch('http://localhost:3001/api/whatsapp/groups');
       const data = await res.json();
-      if (data.success) {
-        setGroups(data.groups || []);
+      if (data.success && data.groups) {
+        setGroups(data.groups);
         if (data.groups.length > 0 && !selectedGroup) {
           setSelectedGroup(data.groups[0].id);
         }
       }
     } catch (err) {
       console.warn('Erro ao buscar grupos:', err);
+    } finally {
+      setLoadingGroups(false);
     }
   };
 
@@ -131,22 +137,61 @@ export default function App() {
     }
   };
 
+  // Enviar teste imediato
+  const sendTestMessage = async () => {
+    const targetId = selectedGroup;
+    const targetName = manualGroupName.trim();
+
+    if (!targetId && !targetName) {
+      alert('Selecione um grupo ou digite o nome do grupo para enviar o teste!');
+      return;
+    }
+
+    setTestSending(true);
+    setTestFeedback(null);
+    try {
+      const res = await fetch('http://localhost:3001/api/whatsapp/send-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetGroupId: targetId,
+          targetGroupName: targetName,
+          affiliateTag,
+          copyStyle,
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestFeedback(`✅ Oferta de teste enviada com sucesso para o grupo "${data.groupName}"!`);
+      } else {
+        setTestFeedback(`❌ Erro: ${data.error}`);
+      }
+    } catch (err) {
+      setTestFeedback('❌ Erro ao enviar mensagem de teste.');
+    } finally {
+      setTestSending(false);
+    }
+  };
+
   const startAutoPoster = async () => {
-    if (!selectedGroup) {
-      alert('Por favor, selecione o grupo de WhatsApp de destino!');
+    const targetId = selectedGroup;
+    const targetName = manualGroupName.trim();
+
+    if (!targetId && !targetName) {
+      alert('Por favor, selecione ou digite o nome do grupo do WhatsApp de destino!');
       return;
     }
 
     const delays = delaysInput.split(',').map(x => parseInt(x.trim())).filter(x => !isNaN(x) && x > 0);
-    const grp = groups.find(g => g.id === selectedGroup);
+    const grp = groups.find(g => g.id === targetId);
 
     try {
       const res = await fetch('http://localhost:3001/api/whatsapp/autopost/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          targetGroupId: selectedGroup,
-          targetGroupName: grp ? grp.name : 'Grupo de Ofertas',
+          targetGroupId: targetId,
+          targetGroupName: targetName || (grp ? grp.name : ''),
           affiliateTag,
           delays,
           copyStyle,
@@ -181,7 +226,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, [selectedCategory]);
 
-  // Contagem regressiva para o próximo post
   useEffect(() => {
     if (!nextPostTimestamp || !isAutoPosting) {
       setCountdown('');
@@ -259,7 +303,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* ABAS SUPERIORES */}
         <div style={{ display: 'flex', gap: 8, background: '#1f2937', padding: 4, borderRadius: 8 }}>
           <button
             onClick={() => setActiveTab('radar')}
@@ -303,7 +346,7 @@ export default function App() {
         <div className="header-stats">
           <div className="stat-chip live">
             <span className="pulse-dot"></span>
-            <span>{isAutoPosting ? 'Automação Rodando' : 'Painel Pronto'}</span>
+            <span>{isAutoPosting ? 'Automação Ativa' : 'Painel Pronto'}</span>
           </div>
         </div>
       </header>
@@ -311,7 +354,6 @@ export default function App() {
       {/* ABA 1: RADAR DE OFERTAS */}
       {activeTab === 'radar' && (
         <>
-          {/* BARRA DE CONFIGURAÇÃO DO AFILIADO */}
           <section style={{ background: '#111827', borderBottom: '1px solid #1f2937', padding: '12px 24px' }}>
             <div style={{ maxWidth: 1400, margin: '0 auto', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#f59e0b', fontSize: 13, fontWeight: 700 }}>
@@ -359,7 +401,6 @@ export default function App() {
             </div>
           </section>
 
-          {/* CONTROLES E FILTROS */}
           <section className="hero-controls">
             <div className="controls-row">
               <div className="search-box">
@@ -411,7 +452,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* CHIPS DE CATEGORIAS */}
             <div className="categories-bar">
               {CATEGORIES.map(cat => (
                 <button
@@ -425,7 +465,6 @@ export default function App() {
             </div>
           </section>
 
-          {/* GRID DE OFERTAS REAIS */}
           <main className="products-container">
             {loading ? (
               <div className="loading-box">
@@ -478,7 +517,6 @@ export default function App() {
                           </span>
                         </div>
 
-                        {/* BOTÕES DE AFILIADO */}
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
                           <button
                             onClick={() => copyToClipboard(p)}
@@ -577,7 +615,6 @@ export default function App() {
       {activeTab === 'automacao' && (
         <main style={{ maxWidth: 1200, margin: '0 auto', padding: '30px 24px', width: '100%' }}>
           
-          {/* HEADER DA AUTOMAÇÃO */}
           <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 14, padding: 24, marginBottom: 24 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
               <div>
@@ -585,11 +622,10 @@ export default function App() {
                   <Bot size={28} color="#25D366" /> Robô Disparador de Ofertas (WhatsApp)
                 </h2>
                 <p style={{ color: '#9ca3af', fontSize: 13, marginTop: 4 }}>
-                  Postagem 100% automática no seu grupo com <strong>delays aleatórios anti-ban</strong> (3, 5, 7, 9, 12, 15, 25 min) e links de afiliado.
+                  Postagem 100% automática no seu grupo com <strong>delays aleatórios anti-ban</strong> (3, 5, 7, 9, 12, 15, 25 min).
                 </p>
               </div>
 
-              {/* STATUS DE CONEXÃO */}
               <div>
                 {waStatus === 'ready' ? (
                   <div style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid #10b981', color: '#10b981', padding: '8px 16px', borderRadius: 20, fontWeight: 700, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -602,7 +638,7 @@ export default function App() {
                 ) : waStatus === 'authenticating' ? (
                   <div style={{ color: '#ffe600', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(255, 230, 0, 0.1)', padding: '8px 16px', borderRadius: 20, border: '1px solid rgba(255, 230, 0, 0.3)', fontWeight: 600 }}>
                     <div className="spinner-lg" style={{ width: 14, height: 14, borderWidth: 2 }}></div>
-                    <span>Gerando QR Code (aguarde ~15s)...</span>
+                    <span>Conectando e sincronizando...</span>
                   </div>
                 ) : (
                   <button
@@ -628,7 +664,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* SE ESTIVER NO QR CODE */}
             {waStatus === 'qr_ready' && qrCode && (
               <div style={{ marginTop: 24, background: '#0c1317', border: '1px solid #25D366', borderRadius: 12, padding: 24, display: 'flex', alignItems: 'center', gap: 30, flexWrap: 'wrap' }}>
                 <img src={qrCode} alt="WhatsApp QR Code" style={{ width: 220, height: 220, borderRadius: 8, background: '#fff', padding: 8 }} />
@@ -641,91 +676,130 @@ export default function App() {
                     <li>Aponte a câmera para o QR Code ao lado</li>
                   </ol>
                   <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 12 }}>
-                    *(A conexão é salva no seu computador, você só precisa escanear uma vez).*
+                    *(A sessão fica salva no seu computador, você só precisa escanear uma vez).*
                   </p>
                 </div>
               </div>
             )}
           </div>
 
-          {/* PAINEL DE CONTROLE DE POSTAGEM */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 20, marginBottom: 24 }}>
             
-            {/* CONFIGURAÇÃO DOS DISPAROS */}
+            {/* CONFIGURAÇÃO DO GRUPO */}
             <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 14, padding: 20 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 800, color: '#ffe600', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                <Sliders size={18} /> Configurações de Postagem
-              </h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <h3 style={{ fontSize: 16, fontWeight: 800, color: '#ffe600', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Sliders size={18} /> Grupo de Destino
+                </h3>
+                {waStatus === 'ready' && (
+                  <button
+                    onClick={fetchGroups}
+                    disabled={loadingGroups}
+                    style={{ background: 'transparent', border: '1px solid #374151', color: '#9ca3af', fontSize: 11, padding: '4px 8px', borderRadius: 4, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                  >
+                    <RefreshCw size={12} className={loadingGroups ? 'spin' : ''} />
+                    {loadingGroups ? 'Buscando...' : 'Atualizar Lista'}
+                  </button>
+                )}
+              </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {/* SELETOR DE GRUPOS */}
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af', display: 'block', marginBottom: 6 }}>
-                    Grupo de WhatsApp de Destino:
+                    1. Selecione o grupo detectado {groups.length > 0 ? `(${groups.length} grupos encontrados)` : ''}:
                   </label>
                   {groups.length > 0 ? (
                     <select
                       value={selectedGroup}
-                      onChange={(e) => setSelectedGroup(e.target.value)}
+                      onChange={(e) => {
+                        setSelectedGroup(e.target.value);
+                        const found = groups.find(g => g.id === e.target.value);
+                        if (found) setManualGroupName(found.name);
+                      }}
                       style={{ width: '100%', background: '#1f2937', border: '1px solid #374151', color: '#fff', borderRadius: 8, padding: '10px 12px', fontWeight: 700, fontSize: 13, outline: 'none' }}
                     >
+                      <option value="">-- Selecione o grupo ({groups.length} disponíveis) --</option>
                       {groups.map(g => (
                         <option key={g.id} value={g.id}>{g.name}</option>
                       ))}
                     </select>
                   ) : (
-                    <div style={{ color: '#9ca3af', fontSize: 12, background: '#1f2937', padding: '10px', borderRadius: 6 }}>
-                      {waStatus === 'ready' ? 'Buscando grupos...' : 'Conecte o WhatsApp para listar seus grupos.'}
+                    <div style={{ color: loadingGroups ? '#ffe600' : '#9ca3af', fontSize: 12, background: '#1f2937', padding: '12px', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {loadingGroups ? (
+                        <>
+                          <div className="spinner-lg" style={{ width: 14, height: 14, borderWidth: 2 }}></div>
+                          <span>Sincronizando conversas com seu celular... aguarde 5 a 10s.</span>
+                        </>
+                      ) : waStatus === 'ready' ? (
+                        <span>Carregando grupos... Se demorar, clique em <strong>Atualizar Lista</strong> acima ou digite o nome no campo 2 abaixo! ⬇️</span>
+                      ) : (
+                        <span>Conecte o WhatsApp escaneando o QR Code para listar seus grupos.</span>
+                      )}
                     </div>
                   )}
                 </div>
 
+                {/* DIGITAÇÃO MANUAL DO NOME DO GRUPO */}
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af', display: 'block', marginBottom: 6 }}>
-                    Intervalos Aleatórios entre Envios (Minutos):
+                    2. Ou digite o nome exato do grupo no seu WhatsApp:
+                  </label>
+                  <input
+                    type="text"
+                    value={manualGroupName}
+                    onChange={(e) => setManualGroupName(e.target.value)}
+                    placeholder="Ex: Achadinhos do Mercado Livre ou Ofertas VIP"
+                    style={{ width: '100%', background: '#1f2937', border: '1px solid #374151', color: '#60a5fa', borderRadius: 8, padding: '10px 12px', fontWeight: 700, fontSize: 13, outline: 'none' }}
+                  />
+                  <span style={{ fontSize: 11, color: '#6b7280', marginTop: 4, display: 'block' }}>
+                    💡 Se o grupo não aparecer na lista suspensa acima, digite o nome dele aqui e o robô encontrará na hora de enviar!
+                  </span>
+                </div>
+
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af', display: 'block', marginBottom: 6 }}>
+                    Intervalos entre Envios (Minutos):
                   </label>
                   <input
                     type="text"
                     value={delaysInput}
                     onChange={(e) => setDelaysInput(e.target.value)}
                     placeholder="3, 5, 7, 9, 12, 15, 25"
-                    style={{ width: '100%', background: '#1f2937', border: '1px solid #374151', color: '#ffe600', borderRadius: 8, padding: '10px 12px', fontWeight: 700, fontSize: 13, outline: 'none' }}
+                    style={{ width: '100%', background: '#1f2937', border: '1px solid #374151', color: '#ffe600', borderRadius: 8, padding: '8px 12px', fontWeight: 700, fontSize: 13, outline: 'none' }}
                   />
-                  <span style={{ fontSize: 11, color: '#6b7280', marginTop: 4, display: 'block' }}>
-                    O robô sorteará um desses tempos a cada post para parecer um envio 100% humano.
-                  </span>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <div>
-                    <label style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af', display: 'block', marginBottom: 6 }}>
-                      Desconto Mínimo:
-                    </label>
-                    <select
-                      value={minAutoDiscount}
-                      onChange={(e) => setMinAutoDiscount(Number(e.target.value))}
-                      style={{ width: '100%', background: '#1f2937', border: '1px solid #374151', color: '#fff', borderRadius: 8, padding: '8px 10px', fontWeight: 700, fontSize: 12, outline: 'none' }}
-                    >
-                      <option value="20">≥ 20% OFF</option>
-                      <option value="30">≥ 30% OFF</option>
-                      <option value="40">≥ 40% OFF</option>
-                      <option value="50">≥ 50% OFF (Metade do Preço)</option>
-                    </select>
-                  </div>
+                {/* BOTÃO DE ENVIAR TESTE */}
+                <div style={{ paddingTop: 8, borderTop: '1px dashed #374151' }}>
+                  <button
+                    onClick={sendTestMessage}
+                    disabled={testSending || waStatus !== 'ready'}
+                    style={{
+                      width: '100%',
+                      background: '#1e293b',
+                      border: '1px solid #3b82f6',
+                      color: '#60a5fa',
+                      padding: '10px',
+                      borderRadius: 8,
+                      fontWeight: 700,
+                      fontSize: 12,
+                      cursor: waStatus === 'ready' ? 'pointer' : 'not-allowed',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6
+                    }}
+                  >
+                    <Send size={14} />
+                    {testSending ? 'Enviando teste...' : '📲 Enviar 1 Oferta de Teste Agora'}
+                  </button>
 
-                  <div>
-                    <label style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af', display: 'block', marginBottom: 6 }}>
-                      Estilo da Copy:
-                    </label>
-                    <select
-                      value={copyStyle}
-                      onChange={(e) => setCopyStyle(e.target.value)}
-                      style={{ width: '100%', background: '#1f2937', border: '1px solid #374151', color: '#fff', borderRadius: 8, padding: '8px 10px', fontWeight: 700, fontSize: 12, outline: 'none' }}
-                    >
-                      <option value="urgencia">🚨 Urgência</option>
-                      <option value="achadinho">✨ Achadinho</option>
-                      <option value="direto">🎯 Direto</option>
-                    </select>
-                  </div>
+                  {testFeedback && (
+                    <div style={{ marginTop: 8, fontSize: 12, padding: '6px 10px', borderRadius: 6, background: testFeedback.includes('✅') ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: testFeedback.includes('✅') ? '#6ee7b7' : '#fca5a5' }}>
+                      {testFeedback}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -817,7 +891,7 @@ export default function App() {
 
             {postLogs.length === 0 ? (
               <p style={{ color: '#6b7280', fontSize: 13, padding: '20px 0', textAlign: 'center' }}>
-                Nenhuma oferta enviada ainda. Assim que você iniciar a automação, os envios aparecerão aqui em tempo real!
+                Nenhuma oferta enviada ainda. Assim que você iniciar a automação ou disparar um teste, os envios aparecerão aqui em tempo real!
               </p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
