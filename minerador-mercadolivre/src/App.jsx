@@ -198,7 +198,11 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success) {
-        setTestFeedback(`✅ Oferta de teste enviada com foto e link curto com sucesso para o grupo "${data.groupName}"! 📸🔗`);
+        if (data.hasImage) {
+          setTestFeedback(`✅ Oferta de teste enviada com FOTO e link curto com sucesso para o grupo "${data.groupName}"! 📸🔗`);
+        } else {
+          setTestFeedback(`✅ Oferta de teste enviada como TEXTO formatado e link curto com sucesso para o grupo "${data.groupName}"! 📝🔗`);
+        }
       } else {
         setTestFeedback(`❌ Erro: ${data.error}`);
       }

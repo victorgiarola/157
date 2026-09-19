@@ -313,10 +313,53 @@ function initWhatsAppClient() {
     }
   });
 
-  waClient.on('ready', () => {
+  waClient.on('ready', async () => {
     console.log('✅ WhatsApp Web Conectado e Pronto!');
     waStatus = 'ready';
     qrCodeDataUrl = null;
+
+    // Proteção em nível de navegador para suprimir erros de memoização/getters em contas LID e mídias
+    try {
+      if (waClient.pupPage) {
+        await waClient.pupPage.evaluate(() => {
+          try {
+            const lidUtils = window.require('WAWebLidMigrationUtils');
+            if (lidUtils && typeof lidUtils.toPn === 'function') {
+              const origToPn = lidUtils.toPn;
+              lidUtils.toPn = function(wid) {
+                try {
+                  return origToPn.apply(this, arguments);
+                } catch (e) {
+                  return wid;
+                }
+              };
+            }
+          } catch (e) {}
+
+          try {
+            const contactGetters = window.require('WAWebContactGetters');
+            if (contactGetters) {
+              for (const k of Object.keys(contactGetters)) {
+                if (typeof contactGetters[k] === 'function') {
+                  const orig = contactGetters[k];
+                  contactGetters[k] = function(contact) {
+                    if (!contact) return false;
+                    try {
+                      return orig.apply(this, arguments);
+                    } catch (e) {
+                      return false;
+                    }
+                  };
+                }
+              }
+            }
+          } catch (e) {}
+        });
+      }
+    } catch (e) {
+      console.warn('Aviso: Não foi possível injetar proteção de getters:', e.message);
+    }
+
     // Pré-carrega grupos após sincronização inicial
     setTimeout(() => {
       safeGetGroups().catch(() => {});
@@ -540,16 +583,24 @@ async function shortenUrl(longUrl) {
 
 // Baixa a imagem do produto e prepara como MessageMedia para envio de foto no WhatsApp
 async function getProductMedia(imageUrl) {
-  if (!imageUrl) return null;
+  if (!imageUrl || imageUrl.includes('logo__large_plus')) return null;
   try {
     const res = await axios.get(imageUrl, {
       responseType: 'arraybuffer',
       timeout: 8000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
       }
     });
-    const contentType = res.headers['content-type'] || 'image/jpeg';
+
+    let contentType = res.headers['content-type'] || 'image/jpeg';
+    contentType = contentType.split(';')[0].trim();
+
+    if (contentType.includes('svg') || contentType.includes('html')) {
+      return null;
+    }
+
     const base64Data = Buffer.from(res.data).toString('base64');
     return new MessageMedia(contentType, base64Data, 'oferta.jpg');
   } catch (err) {
@@ -589,22 +640,40 @@ async function formatAffiliateMessage(product, style, tag) {
   return `🚨 *OFERTA RELÂMPAGO NO MERCADO LIVRE!* 🚨\n\n🔥 *${shortTitle}*\n⭐ ${product.salesCount ? `*${product.salesCount}* • ` : ''}Top Avaliado (${product.rating || '4.8'}★)\n\n❌ De: ${oldPriceStr}\n✅ Por apenas: *${product.priceFormatted}* (*${discountStr}*!)\n${frete} ${seloFull}\n\n👇 *Aproveite a promoção aqui:*\n🔗 ${link}\n\n⚠️ _Estoque limitado, corre antes que o preço suba!_`;
 }
 
+// Envia oferta com foto e fallback inteligente para texto formatado caso o WhatsApp Web recuse a mídia
+async function sendProductOffer(chatId, message, media) {
+  if (!waClient || waStatus !== 'ready') {
+    throw new Error('WhatsApp não está pronto ou conectado.');
+  }
+
+  // 1. Tenta envio com foto do produto primeiro
+  if (media) {
+    try {
+      console.log(`📸 Tentando enviar oferta com foto para ${chatId}...`);
+      await waClient.sendMessage(chatId, media, { caption: message });
+      return { success: true, hasImage: true };
+    } catch (mediaErr) {
+      console.warn(`⚠️ Envio de foto encontrou incompatibilidade interna do WhatsApp Web (${mediaErr.message}).`);
+      console.log(`📝 Entregando oferta com formato texto profissional e link curto para garantir o envio...`);
+    }
+  }
+
+  // 2. Envio do texto formatado (com emojis, desconto e link curto encurtado)
+  await waClient.sendMessage(chatId, message);
+  return { success: true, hasImage: false };
+}
+
 // Localiza o chat de destino seja por ID, Link de Convite ou Nome aproximado
 async function resolveTargetChat(groupId, groupName) {
   if (!waClient || waStatus !== 'ready') return null;
 
-  // 1. Se temos groupId direto (@g.us ou @c.us)
+  // 1. Se temos groupId direto (@g.us ou @c.us), usa envio direto (evita carregar modelo pesado com erro de getters)
   if (groupId && (groupId.includes('@g.us') || groupId.includes('@c.us'))) {
-    try {
-      const chat = await waClient.getChatById(groupId);
-      if (chat) return chat;
-    } catch (e) {
-      return {
-        id: { _serialized: groupId },
-        name: groupName || groupId,
-        sendMessage: (content, opts) => waClient.sendMessage(groupId, content, opts)
-      };
-    }
+    return {
+      id: { _serialized: groupId },
+      name: groupName || groupId,
+      sendMessage: (content, opts) => waClient.sendMessage(groupId, content, opts)
+    };
   }
 
   // 2. Busca pelo termo (pode ser nome, ID ou link de convite)
@@ -612,16 +681,11 @@ async function resolveTargetChat(groupId, groupName) {
   if (target) {
     const found = await findGroup(target);
     if (found && found.id) {
-      try {
-        const chat = await waClient.getChatById(found.id);
-        if (chat) return chat;
-      } catch (e) {
-        return {
-          id: { _serialized: found.id },
-          name: found.name,
-          sendMessage: (content, opts) => waClient.sendMessage(found.id, content, opts)
-        };
-      }
+      return {
+        id: { _serialized: found.id },
+        name: found.name,
+        sendMessage: (content, opts) => waClient.sendMessage(found.id, content, opts)
+      };
     }
   }
 
@@ -651,11 +715,8 @@ async function dispatchNextDeal() {
       const message = await formatAffiliateMessage(candidate, autoPostConfig.copyStyle, autoPostConfig.affiliateTag);
       const media = await getProductMedia(candidate.img);
 
-      if (media) {
-        await targetChat.sendMessage(media, { caption: message });
-      } else {
-        await targetChat.sendMessage(message);
-      }
+      const targetId = targetChat.id._serialized || targetChat.id;
+      const result = await sendProductOffer(targetId, message, media);
 
       postedProductsHistory.add(candidate.title);
       postLogs.unshift({
@@ -664,11 +725,11 @@ async function dispatchNextDeal() {
         price: candidate.priceFormatted,
         discount: candidate.discount,
         time: new Date().toLocaleTimeString('pt-BR'),
-        status: media ? 'Foto + Oferta Enviada! 📸✅' : 'Enviado com Sucesso! ✅'
+        status: result.hasImage ? 'Foto + Oferta Enviada! 📸✅' : 'Oferta Enviada! 📝✅'
       });
       if (postLogs.length > 50) postLogs.pop();
 
-      console.log(`🚀 [Auto-Post] Oferta com foto enviada para "${targetChat.name}": ${candidate.title}`);
+      console.log(`🚀 [Auto-Post] Oferta enviada para "${targetChat.name}": ${candidate.title} (${result.hasImage ? 'com foto' : 'texto formatado'})`);
     }
   } catch (err) {
     console.error('Erro ao disparar oferta automática:', err.message);
@@ -829,19 +890,17 @@ app.post('/api/whatsapp/send-test', async (req, res) => {
     const message = await formatAffiliateMessage(sample, copyStyle || 'urgencia', affiliateTag);
     const media = await getProductMedia(sample.img);
 
-    if (media) {
-      await targetChat.sendMessage(media, { caption: message });
-    } else {
-      await targetChat.sendMessage(message);
-    }
+    const targetId = targetChat.id._serialized || targetChat.id;
+    const result = await sendProductOffer(targetId, message, media);
 
     res.json({
       success: true,
       productTitle: sample.title,
       groupName: targetChat.name,
-      hasImage: !!media
+      hasImage: result.hasImage
     });
   } catch (err) {
+    console.error('Erro ao enviar teste:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
