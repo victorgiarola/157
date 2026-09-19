@@ -52,7 +52,7 @@ export default function App() {
   
   // Tag de afiliado
   const [affiliateTag, setAffiliateTag] = useState(() => {
-    return localStorage.getItem('ml_affiliate_tag') || '';
+    return localStorage.getItem('ml_affiliate_tag') || 'givi713407';
   });
   const [copyStyle, setCopyStyle] = useState('urgencia');
 
@@ -286,12 +286,26 @@ export default function App() {
     return () => clearInterval(timer);
   }, [nextPostTimestamp, isAutoPosting]);
 
+  const cleanMercadoLivreUrl = (url) => {
+    if (!url) return '';
+    try {
+      const u = new URL(url);
+      const pMatch = u.pathname.match(/\/p\/(MLB\d+)/i);
+      if (pMatch) return `https://www.mercadolivre.com.br/p/${pMatch[1].toUpperCase()}`;
+      const mlbMatch = u.pathname.match(/(MLB-?\d+)/i);
+      if (mlbMatch) return `https://produto.mercadolivre.com.br/${mlbMatch[1].toUpperCase()}`;
+      return `${u.origin}${u.pathname}`;
+    } catch (e) {
+      return url.split('?')[0];
+    }
+  };
+
   const getAffiliateLink = (originalLink) => {
-    const clean = originalLink ? originalLink.split('?')[0] : '';
-    if (!affiliateTag.trim()) return clean;
-    if (affiliateTag.startsWith('http')) return affiliateTag;
+    const clean = cleanMercadoLivreUrl(originalLink);
+    const tag = (affiliateTag && affiliateTag.trim()) ? affiliateTag.trim() : 'givi713407';
+    if (tag.startsWith('http')) return tag;
     const separator = clean.includes('?') ? '&' : '?';
-    return `${clean}${separator}matt_tool=${encodeURIComponent(affiliateTag)}`;
+    return `${clean}${separator}matt_tool=${encodeURIComponent(tag)}`;
   };
 
   const generateWhatsAppCopy = (product, style = copyStyle) => {

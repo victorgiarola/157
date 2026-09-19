@@ -16,6 +16,10 @@ const { Client, LocalAuth, MessageMedia } = pkg;
 import QRCode from 'qrcode';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3001;
@@ -91,7 +95,13 @@ async function scrapeDealsPage(targetUrl) {
     const $el = $(el);
     const link = $el.find('a[href*="MLB"]').first().attr('href') || $el.find('a').attr('href');
     const title = $el.find('[class*="poly-component__title"], [class*="title"], h2, h3').first().text().trim();
-    const img = $el.find('img').attr('src') || $el.find('img').attr('data-src');
+    let img = $el.find('img').attr('src') || $el.find('img').attr('data-src') || $el.find('img').attr('data-srcset')?.split(' ')[0];
+    if (img && (img.startsWith('data:') || img.includes('logo__large_plus') || img.includes('.svg'))) {
+      img = null;
+    }
+    if (img && img.includes('mlstatic.com')) {
+      img = img.replace(/\.webp$/i, '.jpg').replace(/-[A-Z]{1,2}\.jpg$/i, '-O.jpg');
+    }
 
     const currentPriceEl = $el.find('.poly-price__current .andes-money-amount, [class*="price__current"] .andes-money-amount').first();
     const currentAria = currentPriceEl.attr('aria-label');
@@ -119,8 +129,9 @@ async function scrapeDealsPage(targetUrl) {
     const isFreeShipping = cardText.toLowerCase().includes('frete grátis') || cardText.toLowerCase().includes('chegará grátis');
     const isFull = cardText.includes('FULL') || (link && link.includes('full'));
 
-    if (title && price && link && isLegitProduct(title, price)) {
-      if (!products.some(p => p.link === link)) {
+    if (title && price && link && img && isLegitProduct(title, price)) {
+      const cleanLink = link.startsWith('http') ? link : `https://www.mercadolivre.com.br${link}`;
+      if (!products.some(p => p.link === cleanLink || p.title === title)) {
         products.push({
           id: `deal-${i}-${Math.random().toString(36).substring(2, 6)}`,
           rank: i + 1,
@@ -132,8 +143,8 @@ async function scrapeDealsPage(targetUrl) {
           discount: discountText || 'OFERTA',
           rating,
           salesCount,
-          img: img || 'https://http2.mlstatic.com/frontend-assets/ui-navigation/5.21.22/mercadolibre/logo__large_plus.png',
-          link: link.startsWith('http') ? link : `https://www.mercadolivre.com.br${link}`,
+          img: img,
+          link: cleanLink,
           isFreeShipping,
           isFull,
         });
@@ -168,7 +179,13 @@ async function scrapeBestSellers(targetUrl) {
     const $el = $(el);
     const href = $el.attr('href');
     const title = $el.find('.dynamic-carousel__title').text().trim() || $el.find('img').attr('alt') || '';
-    const img = $el.find('img').attr('src') || $el.find('img').attr('data-src');
+    let img = $el.find('img').attr('src') || $el.find('img').attr('data-src');
+    if (img && (img.startsWith('data:') || img.includes('logo__large_plus') || img.includes('.svg'))) {
+      img = null;
+    }
+    if (img && img.includes('mlstatic.com')) {
+      img = img.replace(/\.webp$/i, '.jpg').replace(/-[A-Z]{1,2}\.jpg$/i, '-O.jpg');
+    }
     const rankText = $el.find('.dynamic-carousel__pill-container--text').text().trim();
     
     const priceBlock = $el.find('.dynamic-carousel__price').text().trim();
@@ -180,7 +197,7 @@ async function scrapeBestSellers(targetUrl) {
       price = parseFloat(`${intP}.${centP}`);
     }
 
-    if (title && price && href && isLegitProduct(title, price)) {
+    if (title && price && href && img && isLegitProduct(title, price)) {
       const rankMatch = rankText.match(/(\d+)º/);
       const rank = rankMatch ? parseInt(rankMatch[1]) : products.length + 1;
       const suggestedOldPrice = +(price * 1.3).toFixed(2);
@@ -197,7 +214,7 @@ async function scrapeBestSellers(targetUrl) {
           discount: '30% OFF',
           rating: '4.8',
           salesCount: '+1mil vendidos',
-          img: img || 'https://http2.mlstatic.com/frontend-assets/ui-navigation/5.21.22/mercadolibre/logo__large_plus.png',
+          img: img,
           link: href.startsWith('http') ? href : `https://www.mercadolivre.com.br${href}`,
           isFreeShipping: price > 79,
           isFull: true,
@@ -219,17 +236,70 @@ let qrCodeDataUrl = null;
 let isAutoPosting = false;
 let nextPostTimeout = null;
 let nextPostTimestamp = null;
-const postedProductsHistory = new Set();
-let postLogs = [];
+const HISTORY_FILE = path.join(__dirname, 'posted-history.json');
+const CONFIG_FILE = path.join(__dirname, 'autopost-config.json');
 
-let autoPostConfig = {
-  targetGroupId: '',
-  targetGroupName: '',
-  affiliateTag: '',
-  delays: [3, 5, 7, 9, 12, 15, 25],
-  copyStyle: 'urgencia',
-  minDiscount: 20,
-};
+function loadHistory() {
+  try {
+    if (fs.existsSync(HISTORY_FILE)) {
+      const data = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
+      if (Array.isArray(data)) return new Set(data);
+    }
+  } catch (e) {}
+  return new Set();
+}
+
+function saveHistory(historySet) {
+  try {
+    const list = Array.from(historySet).slice(-1000);
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch (e) {}
+}
+
+const postedProductsHistory = loadHistory();
+
+function isProductAlreadyPosted(product) {
+  if (!product) return true;
+  const idKey = (product.link || '').match(/(MLB-?\d+)/i)?.[1]?.toUpperCase() || product.id;
+  const titleKey = (product.title || '').trim().toLowerCase();
+  return (idKey && postedProductsHistory.has(idKey)) || (titleKey && postedProductsHistory.has(titleKey));
+}
+
+function recordProductPosted(product) {
+  if (!product) return;
+  const idKey = (product.link || '').match(/(MLB-?\d+)/i)?.[1]?.toUpperCase() || product.id;
+  const titleKey = (product.title || '').trim().toLowerCase();
+  if (idKey) postedProductsHistory.add(idKey);
+  if (titleKey) postedProductsHistory.add(titleKey);
+  saveHistory(postedProductsHistory);
+}
+
+function loadAutoPostConfig() {
+  const defaults = {
+    targetGroupId: '',
+    targetGroupName: '',
+    affiliateTag: 'givi713407',
+    delays: [3, 5, 7, 9, 12, 15, 25],
+    copyStyle: 'urgencia',
+    minDiscount: 20,
+  };
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      const saved = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      return { ...defaults, ...saved };
+    }
+  } catch (e) {}
+  return defaults;
+}
+
+function saveAutoPostConfig(cfg) {
+  try {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf8');
+  } catch (e) {}
+}
+
+let autoPostConfig = loadAutoPostConfig();
+let postLogs = [];
 
 let cachedGroups = [];
 
@@ -328,11 +398,47 @@ function initWhatsAppClient() {
 
           const getterModules = [
             'WAWebChatGetters',
+            'WAWebFrontendChatGetters',
+            'WAWebGroupMetadataGetters',
+            'WAWebFrontendGroupMetadataGetters',
+            'WAWebGroupParticipantGetters',
+            'WAWebUnjoinedSubgroupMetadataGetters',
+            'WAWebMsgGetters',
+            'WAWebFrontendMsgGetters',
+            'WAWebContactGetters',
             'WAWebFrontendContactGetters',
             'WAWebBusinessProfileGetters',
-            'WAWebMsgGetters',
+            'WAWebFrontendBusinessProfileGetters',
             'WAWebNewsletterMetadataGetters',
-            'WAWebContactGetters'
+            'WAWebFrontendNewsletterMetadataGetters',
+            'WAWebNewsletterPollVotesGetters',
+            'WAWebFrontendNewsletterPollVotesGetters',
+            'WAWebConnGetters',
+            'WAWebStreamGetters',
+            'WAWebMuteGetters',
+            'WAWebCatalogGetters',
+            'WAWebProductGetters',
+            'WAWebProductImageGetters',
+            'WAWebBroadcastMetadataGetters',
+            'WAWebLabelGetters',
+            'WAWebProfilePicThumbGetters',
+            'WAWebSettingsGetters',
+            'WAWebReactionsSendersGetters',
+            'WAWebStatusGetters',
+            'WAWebFrontendStatusGetters',
+            'WAWebStickerGetters',
+            'WAWebTextStatusGetters',
+            'WAWebFrontendTextStatusGetters',
+            'WAWebAiThreadGetters',
+            'WAWebPresenceGetters',
+            'WAWebFrontendPresenceGetters',
+            'WAWebCommentGetters',
+            'WAWebPinInChatGetters',
+            'WAWebFrontendPinInChatGetters',
+            'WAWebPollVoteGetters',
+            'WAWebFrontendPollVoteGetters',
+            'WAWebChatPreferenceGetters',
+            'WAWebChatstateGetters'
           ];
 
           for (const modName of getterModules) {
@@ -344,13 +450,25 @@ function initWhatsAppClient() {
                   const orig = mod[k];
                   const shielded = function(item) {
                     if (item == null) return undefined;
-                    if (typeof item === 'object' && !item.id) {
-                      item.id = item._serialized || item.wid || item.key?.id || item.filehash || ('synthetic_' + Math.random().toString(36).slice(2, 9));
+                    if (typeof item === 'object') {
+                      if (!item.id) {
+                        const syn = item._serialized || item.wid || item.key?.id || item.filehash || ('synthetic_' + Math.random().toString(36).slice(2, 9));
+                        try {
+                          item.id = syn;
+                        } catch (e1) {
+                          try {
+                            Object.defineProperty(item, 'id', { value: syn, writable: true, configurable: true });
+                          } catch (e2) {}
+                        }
+                      }
                     }
                     try {
                       return orig.apply(this, arguments);
-                    } catch (e) {
-                      return undefined;
+                    } catch (err) {
+                      if (err && err.message && (err.message.includes('id property') || err.message.includes('memoize'))) {
+                        return undefined;
+                      }
+                      throw err;
                     }
                   };
                   shielded.__shielded = true;
@@ -606,44 +724,83 @@ function cleanMercadoLivreUrl(url) {
   }
 }
 
-// Baixa a imagem do produto e prepara como MessageMedia para envio de foto no WhatsApp
-async function getProductMedia(imageUrl) {
-  if (!imageUrl || imageUrl.includes('logo__large_plus')) return null;
-  try {
-    const res = await axios.get(imageUrl, {
-      responseType: 'arraybuffer',
-      timeout: 8000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-      }
-    });
+// Baixa a imagem do produto em alta resolução e formato JPEG oficial para WhatsApp
+async function getProductMedia(imageUrl, productLink) {
+  let targetUrl = imageUrl;
 
-    let contentType = res.headers['content-type'] || 'image/jpeg';
-    contentType = contentType.split(';')[0].trim();
-
-    if (contentType.includes('svg') || contentType.includes('html')) {
-      return null;
+  // Se não veio imagem ou veio placeholder, tenta extrair da página do produto
+  if (!targetUrl || targetUrl.includes('logo__large_plus') || targetUrl.startsWith('data:')) {
+    if (productLink) {
+      try {
+        const pageRes = await axios.get(productLink, {
+          timeout: 7000,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+        });
+        const match = pageRes.data.match(/https:\/\/http2\.mlstatic\.com\/D_NQ_NP_[^"'\s]+\.(?:jpg|jpeg|webp)/i);
+        if (match) targetUrl = match[0];
+      } catch (e) {}
     }
+  }
 
-    const base64Data = Buffer.from(res.data).toString('base64');
-    return new MessageMedia(contentType, base64Data, 'oferta.jpg');
-  } catch (err) {
-    console.warn('Aviso: Não foi possível baixar foto do produto para envio:', err.message);
+  if (!targetUrl || targetUrl.includes('logo__large_plus') || targetUrl.startsWith('data:')) {
+    console.warn('⚠️ Foto não encontrada para o produto.');
     return null;
   }
+
+  // Prepara variações com preferência absoluta para JPEG em alta definição (-O.jpg)
+  const candidates = [
+    targetUrl.replace(/\.webp$/i, '.jpg').replace(/-[A-Z]{1,2}\.jpg$/i, '-O.jpg'),
+    targetUrl.replace(/\.webp$/i, '.jpg'),
+    targetUrl
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const res = await axios.get(candidate, {
+        responseType: 'arraybuffer',
+        timeout: 8000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'image/jpeg,image/png,image/*;q=0.9'
+        }
+      });
+
+      let contentType = res.headers['content-type'] || 'image/jpeg';
+      contentType = contentType.split(';')[0].trim();
+
+      if (contentType.includes('svg') || contentType.includes('html') || res.data.length < 1000) {
+        continue;
+      }
+
+      // Converte para image/jpeg para garantir que o WhatsApp Web trate como FOTO (e não sticker)
+      if (contentType === 'image/webp') {
+        contentType = 'image/jpeg';
+      }
+
+      const base64Data = Buffer.from(res.data).toString('base64');
+      return new MessageMedia(contentType, base64Data, 'produto.jpg');
+    } catch (err) {}
+  }
+
+  return null;
 }
 
 async function formatAffiliateMessage(product, style, tag) {
   let link = cleanMercadoLivreUrl(product.link);
-  if (tag && tag.trim()) {
-    if (tag.startsWith('http')) {
-      link = tag.trim();
+  const effectiveTag = (tag && tag.trim()) ? tag.trim() : (autoPostConfig.affiliateTag || 'givi713407');
+  if (effectiveTag) {
+    if (effectiveTag.startsWith('http')) {
+      link = effectiveTag;
+    } else if (effectiveTag.includes('=')) {
+      const sep = link.includes('?') ? '&' : '?';
+      link = `${link}${sep}${effectiveTag}`;
     } else {
       const sep = link.includes('?') ? '&' : '?';
-      link = `${link}${sep}matt_tool=${encodeURIComponent(tag.trim())}`;
+      link = `${link}${sep}matt_tool=${encodeURIComponent(effectiveTag)}`;
     }
   }
+
+  console.log(`🔗 Link de afiliado gerado: ${link}`);
 
   const shortTitle = product.title.length > 70 ? product.title.substring(0, 67) + '...' : product.title;
   const oldPriceStr = product.oldPriceFormatted ? `~${product.oldPriceFormatted}~` : `~R$ ${(product.price * 1.35).toFixed(2).replace('.', ',')}~`;
@@ -682,14 +839,16 @@ async function sendProductOffer(chatId, message, media) {
   // 1. Tenta envio com foto do produto primeiro
   if (media) {
     try {
-      console.log(`📸 Tentando enviar oferta com foto para ${chatId}...`);
+      console.log(`📸 Enviando foto oficial do produto (${media.mimetype}, ~${Math.round(media.data.length * 0.75 / 1024)} KB) para ${chatId}...`);
       await waClient.sendMessage(chatId, media, { caption: message });
       console.log(`🎉 Oferta com FOTO enviada com sucesso para ${chatId}!`);
       return { success: true, hasImage: true };
     } catch (mediaErr) {
-      console.warn(`⚠️ Envio de foto encontrou incompatibilidade interna do WhatsApp Web (${mediaErr.message}).`);
+      console.warn(`⚠️ Envio de foto encontrou erro no WhatsApp Web: ${mediaErr.message}`);
       console.log(`📝 Entregando oferta com link oficial do Mercado Livre e preview enriquecido...`);
     }
+  } else {
+    console.warn(`⚠️ Mídia não disponível para este produto. Entregando texto com linkPreview.`);
   }
 
   // 2. Envio do texto formatado com linkPreview ativo (renderiza o card com foto e título oficial do Mercado Livre)
@@ -730,6 +889,38 @@ async function resolveTargetChat(groupId, groupName) {
   return null;
 }
 
+// Busca ofertas navegando por múltiplas páginas de ofertas e categorias para sempre achar produtos novos
+async function getNextUnpostedDeal(minDiscount = 20) {
+  const sources = [
+    'https://www.mercadolivre.com.br/ofertas?page=1',
+    'https://www.mercadolivre.com.br/ofertas?page=2',
+    'https://www.mercadolivre.com.br/ofertas?page=3',
+    'https://www.mercadolivre.com.br/ofertas?page=4',
+    'https://www.mercadolivre.com.br/ofertas?page=5',
+    'https://www.mercadolivre.com.br/mais-vendidos/MLB1051', // Celulares
+    'https://www.mercadolivre.com.br/mais-vendidos/MLB1648', // Informática
+    'https://www.mercadolivre.com.br/mais-vendidos/MLB1000', // Eletrônicos
+    'https://www.mercadolivre.com.br/mais-vendidos/MLB1574', // Casa e Eletrodomésticos
+    'https://www.mercadolivre.com.br/mais-vendidos/MLB1246', // Beleza
+    'https://www.mercadolivre.com.br/mais-vendidos/MLB1144', // Games
+  ];
+
+  for (const src of sources) {
+    try {
+      const deals = await scrapeDealsPage(src);
+      for (const d of deals) {
+        if (isProductAlreadyPosted(d)) continue;
+        const discountNum = parseInt((d.discount || '').replace(/\D/g, '')) || 0;
+        if (discountNum >= minDiscount) {
+          return d;
+        }
+      }
+    } catch (e) {}
+  }
+
+  return null;
+}
+
 // Disparar uma oferta automática
 async function dispatchNextDeal() {
   if (!isAutoPosting || waStatus !== 'ready') return;
@@ -742,21 +933,19 @@ async function dispatchNextDeal() {
       return;
     }
 
-    const deals = await scrapeDealsPage('https://www.mercadolivre.com.br/ofertas');
-    const candidate = deals.find(d => {
-      if (postedProductsHistory.has(d.title)) return false;
-      const discountNum = parseInt((d.discount || '').replace(/\D/g, '')) || 0;
-      return discountNum >= autoPostConfig.minDiscount;
-    });
+    // Busca o próximo produto 100% novo (nunca postado antes)
+    const candidate = await getNextUnpostedDeal(autoPostConfig.minDiscount);
 
     if (candidate) {
       const message = await formatAffiliateMessage(candidate, autoPostConfig.copyStyle, autoPostConfig.affiliateTag);
-      const media = await getProductMedia(candidate.img);
+      const media = await getProductMedia(candidate.img, candidate.link);
 
       const targetId = targetChat.id._serialized || targetChat.id;
       const result = await sendProductOffer(targetId, message, media);
 
-      postedProductsHistory.add(candidate.title);
+      // Registra no histórico persistido em disco para NUNCA mais repetir
+      recordProductPosted(candidate);
+
       postLogs.unshift({
         id: Date.now(),
         title: candidate.title,
@@ -768,6 +957,8 @@ async function dispatchNextDeal() {
       if (postLogs.length > 50) postLogs.pop();
 
       console.log(`🚀 [Auto-Post] Oferta enviada para "${targetChat.name}": ${candidate.title} (${result.hasImage ? 'com foto' : 'texto formatado'})`);
+    } else {
+      console.log('ℹ️ [Auto-Post] Todas as ofertas mineradas já foram enviadas. Tentando novas buscas...');
     }
   } catch (err) {
     console.error('Erro ao disparar oferta automática:', err.message);
@@ -919,23 +1110,32 @@ app.post('/api/whatsapp/send-test', async (req, res) => {
       return res.status(404).json({ success: false, error: `Grupo "${targetGroupName || targetGroupId}" não encontrado no seu WhatsApp.` });
     }
 
-    const deals = await scrapeDealsPage('https://www.mercadolivre.com.br/ofertas');
-    if (deals.length === 0) {
+    // Busca oferta que ainda não foi postada e com imagem garantida
+    let sample = await getNextUnpostedDeal(10);
+    if (!sample) {
+      const deals = await scrapeDealsPage('https://www.mercadolivre.com.br/ofertas');
+      sample = deals.find(d => d.img) || deals[0];
+    }
+
+    if (!sample) {
       return res.status(404).json({ success: false, error: 'Nenhuma oferta encontrada para teste.' });
     }
 
-    const sample = deals[0];
     const message = await formatAffiliateMessage(sample, copyStyle || 'urgencia', affiliateTag);
-    const media = await getProductMedia(sample.img);
+    const media = await getProductMedia(sample.img, sample.link);
 
     const targetId = targetChat.id._serialized || targetChat.id;
     const result = await sendProductOffer(targetId, message, media);
+
+    // Registra o produto testado no histórico persistido para não repetir no grupo
+    recordProductPosted(sample);
 
     res.json({
       success: true,
       productTitle: sample.title,
       groupName: targetChat.name,
-      hasImage: result.hasImage
+      hasImage: result.hasImage,
+      affiliateLink: cleanMercadoLivreUrl(sample.link)
     });
   } catch (err) {
     console.error('Erro ao enviar teste:', err.message);
@@ -954,14 +1154,18 @@ app.post('/api/whatsapp/autopost/start', (req, res) => {
     return res.status(400).json({ success: false, error: 'Selecione ou digite o nome do grupo!' });
   }
 
+  const effectiveTag = (affiliateTag && affiliateTag.trim()) ? affiliateTag.trim() : (autoPostConfig.affiliateTag || 'givi713407');
+
   autoPostConfig = {
-    targetGroupId: targetGroupId || '',
-    targetGroupName: targetGroupName || '',
-    affiliateTag: affiliateTag || '',
+    targetGroupId: targetGroupId || autoPostConfig.targetGroupId || '',
+    targetGroupName: targetGroupName || autoPostConfig.targetGroupName || '',
+    affiliateTag: effectiveTag,
     delays: (delays && delays.length) ? delays : [3, 5, 7, 9, 12, 15, 25],
     copyStyle: copyStyle || 'urgencia',
     minDiscount: minDiscount || 20,
   };
+
+  saveAutoPostConfig(autoPostConfig);
 
   isAutoPosting = true;
   dispatchNextDeal();
