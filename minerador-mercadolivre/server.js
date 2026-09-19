@@ -355,19 +355,62 @@ async function safeGetGroups() {
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
+      // 1. Tenta via getChats() do whatsapp-web.js
       const chats = await waClient.getChats();
       if (chats && Array.isArray(chats)) {
         const groups = chats
-          .filter(c => c && c.isGroup)
+          .filter(c => c && (
+            c.isGroup === true ||
+            (c.id?._serialized && c.id._serialized.endsWith('@g.us')) ||
+            (c.id?.server === 'g.us') ||
+            (typeof c.id === 'string' && c.id.endsWith('@g.us'))
+          ))
           .map(g => ({
-            id: g.id?._serialized || g.id,
-            name: g.name || 'Grupo sem nome',
-          }));
+            id: g.id?._serialized || (typeof g.id === 'string' ? g.id : (g.id?.user ? g.id.user + '@g.us' : '')),
+            name: g.formattedTitle || g.name || g.contact?.name || 'Grupo sem nome',
+          }))
+          .filter(g => g.id);
+
         if (groups.length > 0) {
-          cachedGroups = groups;
-          return groups;
+          const map = new Map();
+          cachedGroups.forEach(item => map.set(item.id, item));
+          groups.forEach(item => map.set(item.id, item));
+          cachedGroups = Array.from(map.values());
+          return cachedGroups;
         }
       }
+
+      // 2. Fallback direto via Store do Chromium caso getChats() filtre ou não tenha hidratado
+      if (waClient.pupPage) {
+        const storeGroups = await waClient.pupPage.evaluate(() => {
+          try {
+            const collections = window.require('WAWebCollections');
+            const chatModels = collections?.Chat?.getModelsArray?.() || [];
+            const result = [];
+            for (const c of chatModels) {
+              const id = c.id?._serialized || (c.id ? c.id.toString() : '');
+              if (id.endsWith('@g.us') || c.isGroup || c.id?.server === 'g.us') {
+                result.push({
+                  id: id,
+                  name: c.formattedTitle || c.name || 'Grupo sem nome'
+                });
+              }
+            }
+            return result;
+          } catch (e) {
+            return [];
+          }
+        });
+
+        if (storeGroups && storeGroups.length > 0) {
+          const map = new Map();
+          cachedGroups.forEach(item => map.set(item.id, item));
+          storeGroups.forEach(item => map.set(item.id, item));
+          cachedGroups = Array.from(map.values());
+          return cachedGroups;
+        }
+      }
+
       if (attempt < 3) await new Promise(r => setTimeout(r, 1500));
     } catch (err) {
       console.warn(`[Tentativa ${attempt}/3 obter grupos]:`, err.message);
@@ -377,6 +420,95 @@ async function safeGetGroups() {
     }
   }
   return cachedGroups;
+}
+
+// Localiza um grupo específico por nome, link de convite ou ID direto
+async function findGroup(query) {
+  if (!waClient || waStatus !== 'ready' || !query) return null;
+  const raw = query.trim();
+
+  // 1. Link de convite do WhatsApp (ex: https://chat.whatsapp.com/ABCDEF12345)
+  const inviteMatch = raw.match(/chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/i);
+  if (inviteMatch) {
+    const code = inviteMatch[1];
+    try {
+      const inviteInfo = await waClient.getInviteInfo(code);
+      if (inviteInfo) {
+        const id = inviteInfo.id?._serialized || inviteInfo.id;
+        const name = inviteInfo.subject || inviteInfo.name || 'Grupo via Link';
+        const groupObj = { id, name };
+        if (!cachedGroups.some(g => g.id === id)) cachedGroups.unshift(groupObj);
+        return groupObj;
+      }
+    } catch (e) {
+      try {
+        const joinedId = await waClient.acceptInvite(code);
+        if (joinedId) {
+          const groupObj = { id: joinedId, name: 'Grupo via Convite' };
+          if (!cachedGroups.some(g => g.id === joinedId)) cachedGroups.unshift(groupObj);
+          return groupObj;
+        }
+      } catch (err2) {
+        console.warn('Erro ao processar convite:', err2.message);
+      }
+    }
+  }
+
+  // 2. Já é um ID do WhatsApp direto
+  if (raw.includes('@g.us')) {
+    const inCache = cachedGroups.find(g => g.id === raw);
+    if (inCache) return inCache;
+    const groupObj = { id: raw, name: raw };
+    cachedGroups.unshift(groupObj);
+    return groupObj;
+  }
+
+  // 3. Busca por nome (sem acentos, case-insensitive)
+  const clean = raw.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  // Primeiro no cache
+  const fromCache = cachedGroups.find(g => {
+    const gClean = (g.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return gClean.includes(clean);
+  });
+  if (fromCache) return fromCache;
+
+  // Depois atualizando a lista completa
+  const allGroups = await safeGetGroups();
+  const matched = allGroups.find(g => {
+    const gClean = (g.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return gClean.includes(clean);
+  });
+  if (matched) return matched;
+
+  // 4. Busca direta no Store do Chromium por qualquer correspondência de título
+  if (waClient.pupPage) {
+    try {
+      const storeMatch = await waClient.pupPage.evaluate((searchTerm) => {
+        try {
+          const collections = window.require('WAWebCollections');
+          const chatModels = collections?.Chat?.getModelsArray?.() || [];
+          for (const c of chatModels) {
+            const id = c.id?._serialized || '';
+            if (id.endsWith('@g.us') || c.isGroup) {
+              const title = (c.formattedTitle || c.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+              if (title.includes(searchTerm)) {
+                return { id, name: c.formattedTitle || c.name };
+              }
+            }
+          }
+        } catch (e) {}
+        return null;
+      }, clean);
+
+      if (storeMatch) {
+        if (!cachedGroups.some(g => g.id === storeMatch.id)) cachedGroups.unshift(storeMatch);
+        return storeMatch;
+      }
+    } catch (e) {}
+  }
+
+  return null;
 }
 
 function formatAffiliateMessage(product, style, tag) {
@@ -407,7 +539,7 @@ function formatAffiliateMessage(product, style, tag) {
   return `🚨 *OFERTA RELÂMPAGO NO MERCADO LIVRE!* 🚨\n\n🔥 *${shortTitle}*\n⭐ ${product.salesCount ? `*${product.salesCount}* • ` : ''}Top Avaliado (${product.rating || '4.8'}★)\n\n❌ De: ${oldPriceStr}\n✅ Por apenas: *${product.priceFormatted}* (*${discountStr}*!)\n${frete} ${seloFull}\n\n👇 *Aproveite a promoção aqui:*\n🔗 ${link}\n\n⚠️ _Estoque limitado, corre antes que o preço suba!_`;
 }
 
-// Localiza o chat de destino seja por ID ou por Nome aproximado
+// Localiza o chat de destino seja por ID, Link de Convite ou Nome aproximado
 async function resolveTargetChat(groupId, groupName) {
   if (!waClient || waStatus !== 'ready') return null;
 
@@ -418,44 +550,28 @@ async function resolveTargetChat(groupId, groupName) {
       if (chat) return chat;
     } catch (e) {
       return {
+        id: { _serialized: groupId },
         name: groupName || groupId,
         sendMessage: (msg) => waClient.sendMessage(groupId, msg)
       };
     }
   }
 
-  // 2. Busca por nome no cache imediato ou lista atualizada
-  const cleanTarget = (groupName || groupId || '').trim().toLowerCase();
-  if (cleanTarget) {
-    const inCache = cachedGroups.find(g => g.name && g.name.toLowerCase().includes(cleanTarget));
-    if (inCache) {
+  // 2. Busca pelo termo (pode ser nome, ID ou link de convite)
+  const target = (groupName || groupId || '').trim();
+  if (target) {
+    const found = await findGroup(target);
+    if (found && found.id) {
       try {
-        const chat = await waClient.getChatById(inCache.id);
+        const chat = await waClient.getChatById(found.id);
         if (chat) return chat;
       } catch (e) {
         return {
-          name: inCache.name,
-          sendMessage: (msg) => waClient.sendMessage(inCache.id, msg)
+          id: { _serialized: found.id },
+          name: found.name,
+          sendMessage: (msg) => waClient.sendMessage(found.id, msg)
         };
       }
-    }
-
-    try {
-      const allGroups = await safeGetGroups();
-      const matched = allGroups.find(g => g.name && g.name.toLowerCase().includes(cleanTarget));
-      if (matched) {
-        try {
-          const chat = await waClient.getChatById(matched.id);
-          if (chat) return chat;
-        } catch (e) {
-          return {
-            name: matched.name,
-            sendMessage: (msg) => waClient.sendMessage(matched.id, msg)
-          };
-        }
-      }
-    } catch (err) {
-      console.warn('Erro ao resolver grupo por nome:', err.message);
     }
   }
 
@@ -605,6 +721,32 @@ app.get('/api/whatsapp/groups', async (req, res) => {
       groups: cachedGroups,
       warning: err.message
     });
+  }
+});
+
+// Busca ou valida grupo pelo nome, ID ou link de convite
+app.post('/api/whatsapp/find-group', async (req, res) => {
+  const { query } = req.body;
+  if (!query || !query.trim()) {
+    return res.status(400).json({ success: false, error: 'Digite o nome do grupo ou cole o link de convite.' });
+  }
+
+  if (waStatus !== 'ready') {
+    return res.status(400).json({ success: false, error: 'Conecte o WhatsApp escaneando o QR Code primeiro!' });
+  }
+
+  try {
+    const group = await findGroup(query.trim());
+    if (group) {
+      res.json({ success: true, group });
+    } else {
+      res.json({
+        success: false,
+        error: `Grupo "${query}" não foi encontrado. Dica: Se o grupo foi criado recentemente no celular e ainda não tem mensagens, envie um "oi" nele pelo celular para o WhatsApp Web sincronizar, ou cole o Link de Convite do grupo aqui!`
+      });
+    }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

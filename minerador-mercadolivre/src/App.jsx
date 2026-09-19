@@ -71,10 +71,46 @@ export default function App() {
   const [postLogs, setPostLogs] = useState([]);
   const [testSending, setTestSending] = useState(false);
   const [testFeedback, setTestFeedback] = useState(null);
+  const [searchingGroup, setSearchingGroup] = useState(false);
+  const [groupFeedback, setGroupFeedback] = useState(null);
 
   const handleTagChange = (val) => {
     setAffiliateTag(val);
     localStorage.setItem('ml_affiliate_tag', val);
+  };
+
+  const handleFindGroup = async () => {
+    const query = manualGroupName.trim();
+    if (!query) {
+      alert('Digite o nome do grupo ou cole o link de convite (ex: https://chat.whatsapp.com/...)');
+      return;
+    }
+
+    setSearchingGroup(true);
+    setGroupFeedback(null);
+    try {
+      const res = await fetch('http://localhost:3001/api/whatsapp/find-group', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query })
+      });
+      const data = await res.json();
+      if (data.success && data.group) {
+        setSelectedGroup(data.group.id);
+        setManualGroupName(data.group.name);
+        setGroups(prev => {
+          if (prev.some(g => g.id === data.group.id)) return prev;
+          return [data.group, ...prev];
+        });
+        setGroupFeedback({ type: 'success', text: `✅ Grupo "${data.group.name}" localizado e selecionado com sucesso!` });
+      } else {
+        setGroupFeedback({ type: 'error', text: data.error || 'Grupo não encontrado.' });
+      }
+    } catch (err) {
+      setGroupFeedback({ type: 'error', text: 'Erro ao conectar ao servidor para localizar grupo.' });
+    } finally {
+      setSearchingGroup(false);
+    }
   };
 
   const fetchProducts = async (catId) => {
@@ -740,21 +776,68 @@ export default function App() {
                   )}
                 </div>
 
-                {/* DIGITAÇÃO MANUAL DO NOME DO GRUPO */}
+                {/* DIGITAÇÃO MANUAL DO NOME OU LINK DO GRUPO */}
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af', display: 'block', marginBottom: 6 }}>
-                    2. Ou digite o nome exato do grupo no seu WhatsApp:
+                    2. Ou digite o nome / cole o Link de Convite do grupo:
                   </label>
-                  <input
-                    type="text"
-                    value={manualGroupName}
-                    onChange={(e) => setManualGroupName(e.target.value)}
-                    placeholder="Ex: Achadinhos do Mercado Livre ou Ofertas VIP"
-                    style={{ width: '100%', background: '#1f2937', border: '1px solid #374151', color: '#60a5fa', borderRadius: 8, padding: '10px 12px', fontWeight: 700, fontSize: 13, outline: 'none' }}
-                  />
-                  <span style={{ fontSize: 11, color: '#6b7280', marginTop: 4, display: 'block' }}>
-                    💡 Se o grupo não aparecer na lista suspensa acima, digite o nome dele aqui e o robô encontrará na hora de enviar!
-                  </span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      type="text"
+                      value={manualGroupName}
+                      onChange={(e) => {
+                        setManualGroupName(e.target.value);
+                        setGroupFeedback(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleFindGroup();
+                      }}
+                      placeholder="Nome do grupo OU link https://chat.whatsapp.com/..."
+                      style={{ flex: 1, background: '#1f2937', border: '1px solid #374151', color: '#60a5fa', borderRadius: 8, padding: '10px 12px', fontWeight: 700, fontSize: 13, outline: 'none' }}
+                    />
+                    <button
+                      onClick={handleFindGroup}
+                      disabled={searchingGroup || waStatus !== 'ready'}
+                      style={{
+                        background: waStatus === 'ready' ? '#3b82f6' : '#374151',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 8,
+                        padding: '0 14px',
+                        fontWeight: 700,
+                        fontSize: 12,
+                        cursor: waStatus === 'ready' ? 'pointer' : 'not-allowed',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      <Search size={14} className={searchingGroup ? 'spin' : ''} />
+                      {searchingGroup ? 'Buscando...' : 'Localizar'}
+                    </button>
+                  </div>
+
+                  {groupFeedback && (
+                    <div style={{
+                      marginTop: 8,
+                      padding: '8px 12px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      background: groupFeedback.type === 'success' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                      border: groupFeedback.type === 'success' ? '1px solid #10b981' : '1px solid #ef4444',
+                      color: groupFeedback.type === 'success' ? '#10b981' : '#f87171'
+                    }}>
+                      {groupFeedback.text}
+                    </div>
+                  )}
+
+                  <div style={{ background: '#1f2937', border: '1px dashed #374151', borderRadius: 6, padding: '8px 10px', marginTop: 8 }}>
+                    <span style={{ fontSize: 11, color: '#9ca3af', display: 'block', lineHeight: 1.4 }}>
+                      💡 <strong>DICA IMPORTANTE:</strong> Se você criou o grupo recentemente no seu celular e ele ainda está sem membros/sem mensagens, o WhatsApp Web ainda não o sincronizou. <strong>Envie qualquer mensagem nele pelo celular (ex: "oi")</strong> para ele subir no topo, ou <strong>cole aqui o Link de Convite do grupo</strong> e clique em <em>Localizar</em>!
+                    </span>
+                  </div>
                 </div>
 
                 <div>
