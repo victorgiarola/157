@@ -282,11 +282,27 @@ function loadAutoPostConfig() {
     delays: [3, 5, 7, 9, 12, 15, 25],
     copyStyle: 'urgencia',
     minDiscount: 20,
+    operatingHours: {
+      enabled: true,
+      start: '07:30',
+      end: '21:30'
+    },
+    antiBot: {
+      enabled: true,
+      typingSimulation: true,
+      jitterSeconds: true,
+      spintax: true,
+    }
   };
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const saved = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-      return { ...defaults, ...saved };
+      return {
+        ...defaults,
+        ...saved,
+        operatingHours: { ...defaults.operatingHours, ...(saved.operatingHours || {}) },
+        antiBot: { ...defaults.antiBot, ...(saved.antiBot || {}) }
+      };
     }
   } catch (e) {}
   return defaults;
@@ -296,6 +312,51 @@ function saveAutoPostConfig(cfg) {
   try {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf8');
   } catch (e) {}
+}
+
+// Verifica se o horário atual está na janela de funcionamento (ex: 07:30 às 21:30)
+function checkOperatingHours() {
+  const cfg = autoPostConfig.operatingHours || { enabled: true, start: '07:30', end: '21:30' };
+  if (!cfg.enabled) {
+    return { isAllowed: true, formattedWake: null };
+  }
+
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  const [startH, startM] = (cfg.start || '07:30').split(':').map(Number);
+  const [endH, endM] = (cfg.end || '21:30').split(':').map(Number);
+
+  const startMinutes = (isNaN(startH) ? 7 : startH) * 60 + (isNaN(startM) ? 30 : startM);
+  const endMinutes = (isNaN(endH) ? 21 : endH) * 60 + (isNaN(endM) ? 30 : endM);
+
+  // Está dentro do horário permitido?
+  if (currentMinutes >= startMinutes && currentMinutes < endMinutes) {
+    return { isAllowed: true, formattedWake: null };
+  }
+
+  // Período noturno/madrugada (repouso)
+  const wakeDate = new Date(now);
+  if (currentMinutes >= endMinutes) {
+    // Passou do horário limite da noite (ex: após 21:30) -> acorda amanhã de manhã
+    wakeDate.setDate(wakeDate.getDate() + 1);
+  }
+
+  // Jitter humano aleatório no despertar matinal (entre 15 e 75 segundos após o minuto)
+  const randomSec = Math.floor(Math.random() * 60) + 15;
+  wakeDate.setHours(startH, startM, randomSec, 0);
+
+  const waitMs = Math.max(wakeDate.getTime() - now.getTime(), 60000);
+  const waitMinutes = Math.round(waitMs / (60 * 1000));
+  const formattedWake = `${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')}`;
+
+  return {
+    isAllowed: false,
+    wakeDate,
+    waitMs,
+    waitMinutes,
+    formattedWake
+  };
 }
 
 let autoPostConfig = loadAutoPostConfig();
@@ -777,18 +838,90 @@ async function formatAffiliateMessage(product, style, tag) {
   const shortTitle = product.title.length > 70 ? product.title.substring(0, 67) + '...' : product.title;
   const oldPriceStr = product.oldPriceFormatted ? `~${product.oldPriceFormatted}~` : `~R$ ${(product.price * 1.35).toFixed(2).replace('.', ',')}~`;
   const discountStr = product.discount || 'OFERTA RELÂMPAGO';
-  const frete = product.isFreeShipping ? '📦 *Frete Grátis*' : '🚚 *Entrega Rápida ML*';
-  const seloFull = product.isFull ? '⚡ *Envio FULL*' : '';
+
+  // Se spintax estiver ativado (padrão ativo), varia as frases para evitar fingerprinting de bot
+  const useSpintax = autoPostConfig.antiBot?.spintax !== false;
+
+  const freteOptions = product.isFreeShipping
+    ? ['📦 *Frete Grátis*', '🚀 *Envio com Frete Grátis*', '📦 *Entrega Grátis ML*']
+    : ['🚚 *Entrega Rápida ML*', '🚚 *Envio Imediato*', '📦 *Envio Rápido*'];
+  const frete = useSpintax ? freteOptions[Math.floor(Math.random() * freteOptions.length)] : (product.isFreeShipping ? '📦 *Frete Grátis*' : '🚚 *Entrega Rápida ML*');
+  const seloFull = product.isFull ? ' ⚡ *Envio FULL*' : '';
+
+  const rating = product.rating || '4.8';
+  const sales = product.salesCount ? `(${product.salesCount})` : '';
+  const reviewLines = [
+    `⭐ Avaliação: *${rating}★* ${sales}`,
+    `⭐ Nota *${rating}★* • Destaque em vendas ${sales}`,
+    `⭐ Top Avaliado pelos compradores (*${rating}★*)`,
+    `⭐ Avaliado com *${rating}★* no Mercado Livre ${sales}`
+  ];
+  const reviewStr = useSpintax ? reviewLines[Math.floor(Math.random() * reviewLines.length)] : `⭐ ${product.salesCount ? `*${product.salesCount}* • ` : ''}Top Avaliado (${rating}★)`;
+
+  const priceLines = [
+    `❌ De: ${oldPriceStr}\n✅ Por apenas: *${product.priceFormatted}* (*${discountStr}*!)`,
+    `❌ Era: ${oldPriceStr}\n🔥 Saindo por: *${product.priceFormatted}* (*${discountStr}*!)`,
+    `🏷️ De ${oldPriceStr} por apenas *${product.priceFormatted}* (*${discountStr}*!)`,
+    `📉 Caiu de ${oldPriceStr} para *${product.priceFormatted}* (*${discountStr}*!)`
+  ];
+  const priceStr = useSpintax ? priceLines[Math.floor(Math.random() * priceLines.length)] : `❌ De: ${oldPriceStr}\n✅ Por apenas: *${product.priceFormatted}* (*${discountStr}*!)`;
+
+  const ctas = [
+    `👇 *Garanta o seu antes que acabe o estoque:*\n🔗 ${link}`,
+    `👇 *Aproveite a promoção no link oficial:*\n🔗 ${link}`,
+    `🛒 *Compre pelo link com desconto garantido:*\n🔗 ${link}`,
+    `👉 *Confira os detalhes e aproveite aqui:*\n🔗 ${link}`,
+    `⚡ *Acesse a oferta oficial antes do fim:*\n🔗 ${link}`,
+    `🛍️ *Clique no link oficial para garantir:*\n🔗 ${link}`
+  ];
+  const ctaStr = useSpintax ? ctas[Math.floor(Math.random() * ctas.length)] : `👇 *Aproveite a promoção aqui:*\n🔗 ${link}`;
+
+  const footers = [
+    `⚠️ _Estoque limitado, corre antes que o preço suba!_`,
+    `⚠️ _Valor promocional sujeito a alteração rápida!_`,
+    `⏳ _Desconto por tempo limitado no Mercado Livre._`,
+    `🕒 _Corre que essa oferta costuma esgotar rápido!_`,
+    `⚠️ _Preço promocional verificado agora no Mercado Livre!_`,
+    `🚨 _Promoção ativa enquanto durar o estoque promocional._`
+  ];
+  const footerStr = useSpintax ? footers[Math.floor(Math.random() * footers.length)] : `⚠️ _Estoque limitado, corre antes que o preço suba!_`;
 
   if (style === 'achadinho') {
-    return `✨ *ACHADINHO DO MERCADO LIVRE!* ✨\n\n😍 *${shortTitle}*\n⭐ Avaliação: ${product.rating || '4.8'}★ ${product.salesCount ? `(${product.salesCount})` : ''}\n\n❌ De: ${oldPriceStr}\n✅ Por apenas: *${product.priceFormatted}* (${discountStr}!)\n${frete} ${seloFull}\n\n👇 *Compre antes que acabe o estoque:*\n🔗 ${link}\n\n⚠️ _Valor promocional sujeito a alteração rápida!_`;
+    const headersAchadinho = [
+      '✨ *ACHADINHO DO MERCADO LIVRE!* ✨',
+      '😍 *OLHA ESSE ACHADO QUE ENCONTREI!* 😍',
+      '🌟 *ACHADINHO IMPERDÍVEL HOJE!* 🌟',
+      '🛍️ *ACHADO DE OURO NO MERCADO LIVRE!* 🛍️',
+      '💛 *ACHADINHO QUE VALE A PENA CONFERIR!* 💛'
+    ];
+    const header = useSpintax ? headersAchadinho[Math.floor(Math.random() * headersAchadinho.length)] : '✨ *ACHADINHO DO MERCADO LIVRE!* ✨';
+    return `${header}\n\n😍 *${shortTitle}*\n${reviewStr}\n\n${priceStr}\n${frete}${seloFull}\n\n${ctaStr}\n\n${footerStr}`;
   }
 
   if (style === 'direto') {
-    return `🎯 *${discountStr} NO MERCADO LIVRE!* 🎯\n\n🔥 *${shortTitle}*\n\n💰 De: ${oldPriceStr} por *${product.priceFormatted}*\n${frete} ${seloFull}\n\n👉 *Link oficial da promoção:*\n🔗 ${link}`;
+    const headersDireto = [
+      `🎯 *${discountStr} NO MERCADO LIVRE!* 🎯`,
+      `⚡ *OFERTA DIRETA ML (${discountStr})* ⚡`,
+      `🔥 *PROMOÇÃO DO DIA (${discountStr})* 🔥`,
+      `💥 *DESCONTO CONFIRMADO: ${discountStr}!* 💥`
+    ];
+    const header = useSpintax ? headersDireto[Math.floor(Math.random() * headersDireto.length)] : `🎯 *${discountStr} NO MERCADO LIVRE!* 🎯`;
+    return `${header}\n\n🔥 *${shortTitle}*\n\n💰 De: ${oldPriceStr} por *${product.priceFormatted}*\n${frete}${seloFull}\n\n👉 *Link oficial da promoção:*\n🔗 ${link}`;
   }
 
-  return `🚨 *OFERTA RELÂMPAGO NO MERCADO LIVRE!* 🚨\n\n🔥 *${shortTitle}*\n⭐ ${product.salesCount ? `*${product.salesCount}* • ` : ''}Top Avaliado (${product.rating || '4.8'}★)\n\n❌ De: ${oldPriceStr}\n✅ Por apenas: *${product.priceFormatted}* (*${discountStr}*!)\n${frete} ${seloFull}\n\n👇 *Aproveite a promoção aqui:*\n🔗 ${link}\n\n⚠️ _Estoque limitado, corre antes que o preço suba!_`;
+  // Padrão: Urgência
+  const headersUrgencia = [
+    '🚨 *OFERTA RELÂMPAGO NO MERCADO LIVRE!* 🚨',
+    '⚡ *PROMOÇÃO IMPERDÍVEL ENCONTRADA!* ⚡',
+    '🔥 *BAIXOU O PREÇO NO MERCADO LIVRE!* 🔥',
+    '💥 *SUPER DESCONTO DETECTADO NO ML!* 💥',
+    '🎯 *OPORTUNIDADE EXCLUSIVA HOJE!* 🎯',
+    '🏷️ *DESCONTO FORTE NO MERCADO LIVRE!* 🏷️',
+    '👀 *OLHA ESSE PREÇO QUE BAIXOU!* 👀',
+    '⚡ *QUEIMA DE PREÇO NO MERCADO LIVRE!* ⚡'
+  ];
+  const header = useSpintax ? headersUrgencia[Math.floor(Math.random() * headersUrgencia.length)] : '🚨 *OFERTA RELÂMPAGO NO MERCADO LIVRE!* 🚨';
+  return `${header}\n\n🔥 *${shortTitle}*\n${reviewStr}\n\n${priceStr}\n${frete}${seloFull}\n\n${ctaStr}\n\n${footerStr}`;
 }
 
 function withTimeout(promise, ms = 35000, errorMsg = 'Operação expirou (timeout)') {
@@ -816,13 +949,40 @@ async function sendProductOffer(chatId, message, media) {
     } catch (e) {}
   }
 
+  // 0. Simulação de presença humana (Anti-Bot / Anti-Ban)
+  if (autoPostConfig.antiBot?.enabled !== false && autoPostConfig.antiBot?.typingSimulation !== false) {
+    try {
+      console.log(`🤖 [Anti-Bot] Simulando presença humana (abertura de conversa e digitação)...`);
+      try {
+        const chat = await waClient.getChatById(chatId).catch(() => null);
+        if (chat) {
+          await chat.sendSeen().catch(() => {});
+          await chat.sendStateTyping().catch(() => {});
+        }
+      } catch (e) {}
+
+      // Digitação realista entre 3.5s e 6.5s
+      const typingMs = Math.floor(Math.random() * 3000) + 3500;
+      await new Promise(r => setTimeout(r, typingMs));
+
+      try {
+        const chat = await waClient.getChatById(chatId).catch(() => null);
+        if (chat) await chat.clearState().catch(() => {});
+      } catch (e) {}
+    } catch (presenceErr) {
+      console.warn(`⚠️ [Anti-Bot] Aviso ao simular digitação: ${presenceErr.message}`);
+    }
+  }
+
+  let sendResult = { success: false, hasImage: false };
+
   // 1. Tenta envio com foto do produto primeiro com timeout seguro
   if (media) {
     try {
       console.log(`📸 Enviando foto oficial do produto (${media.mimetype}, ~${Math.round(media.data.length * 0.75 / 1024)} KB) para ${chatId}...`);
       await withTimeout(waClient.sendMessage(chatId, media, { caption: message }), 35000, 'Timeout ao enviar foto pelo WhatsApp Web');
       console.log(`🎉 Oferta com FOTO enviada com sucesso para ${chatId}!`);
-      return { success: true, hasImage: true };
+      sendResult = { success: true, hasImage: true };
     } catch (mediaErr) {
       console.warn(`⚠️ Envio de foto encontrou erro/timeout no WhatsApp Web: ${mediaErr.message}`);
       console.log(`📝 Entregando oferta com link oficial do Mercado Livre e preview enriquecido...`);
@@ -831,18 +991,26 @@ async function sendProductOffer(chatId, message, media) {
     console.warn(`⚠️ Mídia não disponível para este produto. Entregando texto com linkPreview.`);
   }
 
-  // 2. Envio do texto formatado com linkPreview ativo
-  try {
-    await withTimeout(waClient.sendMessage(chatId, message, { linkPreview: true }), 25000, 'Timeout ao enviar mensagem com linkPreview');
-  } catch (e) {
+  // 2. Envio do texto formatado com linkPreview ativo caso a foto não tenha ido
+  if (!sendResult.success) {
     try {
-      await withTimeout(waClient.sendMessage(chatId, message), 15000, 'Timeout ao enviar mensagem de texto simples');
-    } catch (errFinal) {
-      console.error('❌ Falha total ao entregar mensagem no WhatsApp:', errFinal.message);
-      throw errFinal;
+      await withTimeout(waClient.sendMessage(chatId, message, { linkPreview: true }), 25000, 'Timeout ao enviar mensagem com linkPreview');
+      sendResult = { success: true, hasImage: false };
+    } catch (e) {
+      try {
+        await withTimeout(waClient.sendMessage(chatId, message), 15000, 'Timeout ao enviar mensagem de texto simples');
+        sendResult = { success: true, hasImage: false };
+      } catch (errFinal) {
+        console.error('❌ Falha total ao entregar mensagem no WhatsApp:', errFinal.message);
+        throw errFinal;
+      }
     }
   }
-  return { success: true, hasImage: false };
+
+  // 3. Pausa humana de 1.5 a 2.5s após o envio
+  await new Promise(r => setTimeout(r, Math.floor(Math.random() * 1000) + 1500));
+
+  return sendResult;
 }
 
 // Localiza o chat de destino seja por ID, Link de Convite ou Nome aproximado
@@ -933,6 +1101,37 @@ async function getNextUnpostedDeal(minDiscount = 20) {
 async function dispatchNextDeal() {
   if (!isAutoPosting || waStatus !== 'ready') return;
 
+  // 1. Checagem do Horário de Funcionamento (ex: repouso entre 21:30 e 07:30)
+  const hoursCheck = checkOperatingHours();
+  if (!hoursCheck.isAllowed) {
+    const startStr = autoPostConfig.operatingHours?.start || '07:30';
+    const endStr = autoPostConfig.operatingHours?.end || '21:30';
+    console.log(`🌙 [Horário Noturno] Bot em repouso programado (${endStr} às ${startStr}).`);
+    console.log(`⏰ Próximo disparo automático programado para ${hoursCheck.formattedWake} (daqui a ~${Math.round(hoursCheck.waitMinutes / 60)}h ${hoursCheck.waitMinutes % 60}m).`);
+
+    // Registra log para visualização no painel
+    const sleepTitle = `🌙 Repouso Noturno Ativo (${endStr} às ${startStr})`;
+    if (!postLogs.length || postLogs[0].title !== sleepTitle) {
+      postLogs.unshift({
+        id: Date.now(),
+        title: sleepTitle,
+        price: '-',
+        discount: '-',
+        time: new Date().toLocaleTimeString('pt-BR'),
+        status: `Dormindo até as ${hoursCheck.formattedWake} 💤`
+      });
+      if (postLogs.length > 50) postLogs.pop();
+    }
+
+    nextPostTimestamp = hoursCheck.wakeDate.getTime();
+    if (nextPostTimeout) clearTimeout(nextPostTimeout);
+    nextPostTimeout = setTimeout(() => {
+      console.log('☀️ [Bom dia!] Horário comercial iniciado. Retomando postagens no grupo!');
+      dispatchNextDeal();
+    }, hoursCheck.waitMs);
+    return;
+  }
+
   try {
     const targetChat = await resolveTargetChat(autoPostConfig.targetGroupId, autoPostConfig.targetGroupName);
     if (!targetChat) {
@@ -988,18 +1187,37 @@ async function dispatchNextDeal() {
 function scheduleNextRun(customMinutes = null) {
   if (!isAutoPosting) return;
 
+  // Checa se o próximo ciclo cairia no horário noturno
+  const hoursCheck = checkOperatingHours();
+  if (!hoursCheck.isAllowed) {
+    console.log(`🌙 [Auto-Post] Entrando em repouso noturno até as ${hoursCheck.formattedWake}.`);
+    nextPostTimestamp = hoursCheck.wakeDate.getTime();
+    if (nextPostTimeout) clearTimeout(nextPostTimeout);
+    nextPostTimeout = setTimeout(() => {
+      console.log('☀️ [Bom dia!] Horário comercial iniciado. Retomando postagens no grupo!');
+      dispatchNextDeal();
+    }, hoursCheck.waitMs);
+    return;
+  }
+
   const delays = (autoPostConfig.delays && autoPostConfig.delays.length > 0)
     ? autoPostConfig.delays
     : [3, 5, 7, 9, 12, 15, 25];
 
-  const randomMinutes = (customMinutes !== null && customMinutes > 0)
+  const baseMinutes = (customMinutes !== null && customMinutes > 0)
     ? customMinutes
     : delays[Math.floor(Math.random() * delays.length)];
 
-  const delayMs = randomMinutes * 60 * 1000;
+  // Adiciona variação aleatória de segundos (jitter humano) para quebrar padrão robótico
+  const jitterSeconds = (autoPostConfig.antiBot?.jitterSeconds !== false)
+    ? Math.floor(Math.random() * 42) + 12
+    : 0;
+
+  const delayMs = (baseMinutes * 60 + jitterSeconds) * 1000;
 
   nextPostTimestamp = Date.now() + delayMs;
-  console.log(`⏱️ [Auto-Post] Próximo envio agendado para daqui a ${randomMinutes} minutos.`);
+  const totalSec = Math.round(delayMs / 1000);
+  console.log(`⏱️ [Auto-Post] Próximo envio agendado para daqui a ${Math.floor(totalSec / 60)}m ${totalSec % 60}s.`);
 
   if (nextPostTimeout) clearTimeout(nextPostTimeout);
   nextPostTimeout = setTimeout(() => {
@@ -1055,12 +1273,15 @@ app.post('/api/whatsapp/connect', (req, res) => {
 });
 
 app.get('/api/whatsapp/status', (req, res) => {
+  const hoursCheck = checkOperatingHours();
   res.json({
     status: waStatus,
     qrCode: qrCodeDataUrl,
     isAutoPosting,
     autoPostConfig,
     nextPostTimestamp,
+    isNightSleep: !hoursCheck.isAllowed,
+    nextWakeFormatted: hoursCheck.formattedWake || '07:30',
     logs: postLogs.slice(0, 15),
   });
 });
@@ -1174,7 +1395,7 @@ app.post('/api/whatsapp/send-test', async (req, res) => {
 });
 
 app.post('/api/whatsapp/autopost/start', (req, res) => {
-  const { targetGroupId, targetGroupName, affiliateTag, delays, copyStyle, minDiscount } = req.body;
+  const { targetGroupId, targetGroupName, affiliateTag, delays, copyStyle, minDiscount, operatingHours, antiBot } = req.body;
 
   if (waStatus !== 'ready') {
     return res.status(400).json({ success: false, error: 'Conecte o WhatsApp primeiro!' });
@@ -1193,6 +1414,17 @@ app.post('/api/whatsapp/autopost/start', (req, res) => {
     delays: (delays && delays.length) ? delays : [3, 5, 7, 9, 12, 15, 25],
     copyStyle: copyStyle || 'urgencia',
     minDiscount: minDiscount || 20,
+    operatingHours: {
+      enabled: operatingHours?.enabled !== undefined ? operatingHours.enabled : (autoPostConfig.operatingHours?.enabled ?? true),
+      start: operatingHours?.start || autoPostConfig.operatingHours?.start || '07:30',
+      end: operatingHours?.end || autoPostConfig.operatingHours?.end || '21:30',
+    },
+    antiBot: {
+      enabled: antiBot?.enabled !== undefined ? antiBot.enabled : (autoPostConfig.antiBot?.enabled ?? true),
+      typingSimulation: antiBot?.typingSimulation !== undefined ? antiBot.typingSimulation : (autoPostConfig.antiBot?.typingSimulation ?? true),
+      jitterSeconds: antiBot?.jitterSeconds !== undefined ? antiBot.jitterSeconds : (autoPostConfig.antiBot?.jitterSeconds ?? true),
+      spintax: antiBot?.spintax !== undefined ? antiBot.spintax : (autoPostConfig.antiBot?.spintax ?? true),
+    }
   };
 
   saveAutoPostConfig(autoPostConfig);
@@ -1200,6 +1432,23 @@ app.post('/api/whatsapp/autopost/start', (req, res) => {
   isAutoPosting = true;
   dispatchNextDeal();
 
+  res.json({ success: true, config: autoPostConfig });
+});
+
+app.post('/api/whatsapp/autopost/config', (req, res) => {
+  const { operatingHours, antiBot, delays, copyStyle, minDiscount, affiliateTag } = req.body;
+  if (operatingHours) {
+    autoPostConfig.operatingHours = { ...autoPostConfig.operatingHours, ...operatingHours };
+  }
+  if (antiBot) {
+    autoPostConfig.antiBot = { ...autoPostConfig.antiBot, ...antiBot };
+  }
+  if (delays && delays.length) autoPostConfig.delays = delays;
+  if (copyStyle) autoPostConfig.copyStyle = copyStyle;
+  if (minDiscount) autoPostConfig.minDiscount = minDiscount;
+  if (affiliateTag) autoPostConfig.affiliateTag = affiliateTag.trim();
+
+  saveAutoPostConfig(autoPostConfig);
   res.json({ success: true, config: autoPostConfig });
 });
 

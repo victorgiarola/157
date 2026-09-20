@@ -23,7 +23,10 @@ import {
   Sliders,
   CheckCircle2,
   Send,
-  HelpCircle
+  HelpCircle,
+  Moon,
+  Sun,
+  ShieldCheck
 } from 'lucide-react';
 
 const CATEGORIES = [
@@ -73,6 +76,13 @@ export default function App() {
   const [testFeedback, setTestFeedback] = useState(null);
   const [searchingGroup, setSearchingGroup] = useState(false);
   const [groupFeedback, setGroupFeedback] = useState(null);
+
+  // Repouso Noturno e Blindagem Anti-Bot
+  const [isNightSleep, setIsNightSleep] = useState(false);
+  const [nextWakeFormatted, setNextWakeFormatted] = useState('07:30');
+  const [nightPauseEnabled, setNightPauseEnabled] = useState(true);
+  const [nightStart, setNightStart] = useState('07:30');
+  const [nightEnd, setNightEnd] = useState('21:30');
 
   const handleTagChange = (val) => {
     setAffiliateTag(val);
@@ -137,6 +147,22 @@ export default function App() {
       setIsAutoPosting(data.isAutoPosting);
       setNextPostTimestamp(data.nextPostTimestamp);
       setPostLogs(data.logs || []);
+      setIsNightSleep(data.isNightSleep || false);
+      if (data.nextWakeFormatted) {
+        setNextWakeFormatted(data.nextWakeFormatted);
+      }
+
+      if (data.autoPostConfig?.operatingHours) {
+        if (data.autoPostConfig.operatingHours.enabled !== undefined) {
+          setNightPauseEnabled(data.autoPostConfig.operatingHours.enabled);
+        }
+        if (data.autoPostConfig.operatingHours.start) {
+          setNightStart(data.autoPostConfig.operatingHours.start);
+        }
+        if (data.autoPostConfig.operatingHours.end) {
+          setNightEnd(data.autoPostConfig.operatingHours.end);
+        }
+      }
 
       if (data.status === 'ready' && groups.length === 0 && !loadingGroups) {
         fetchGroups();
@@ -144,6 +170,18 @@ export default function App() {
     } catch (err) {
       // Servidor iniciando
     }
+  };
+
+  const updateOperatingHoursConfig = async (enabled, start, end) => {
+    try {
+      await fetch('http://localhost:3001/api/whatsapp/autopost/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operatingHours: { enabled, start, end }
+        })
+      });
+    } catch (e) {}
   };
 
   const fetchGroups = async () => {
@@ -236,6 +274,17 @@ export default function App() {
           delays,
           copyStyle,
           minDiscount: minAutoDiscount,
+          operatingHours: {
+            enabled: nightPauseEnabled,
+            start: nightStart,
+            end: nightEnd,
+          },
+          antiBot: {
+            enabled: true,
+            typingSimulation: true,
+            jitterSeconds: true,
+            spintax: true,
+          }
         })
       });
       const data = await res.json();
@@ -277,9 +326,14 @@ export default function App() {
       if (diff <= 0) {
         setCountdown('Disparando agora... 🚀');
       } else {
-        const mins = Math.floor(diff / 60000);
+        const hours = Math.floor(diff / 3600000);
+        const mins = Math.floor((diff % 3600000) / 60000);
         const secs = Math.floor((diff % 60000) / 1000);
-        setCountdown(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+        if (hours > 0) {
+          setCountdown(`${hours}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`);
+        } else {
+          setCountdown(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+        }
       }
     }, 1000);
 
@@ -872,6 +926,72 @@ export default function App() {
                   />
                 </div>
 
+                {/* HORÁRIO DE FUNCIONAMENTO (PAUSA NOTURNA) */}
+                <div style={{ background: '#1f2937', borderRadius: 10, padding: 14, border: '1px solid #374151' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#f3f4f6', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Moon size={15} color="#a78bfa" /> Pausa Noturna Automática
+                    </span>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12, color: nightPauseEnabled ? '#10b981' : '#9ca3af' }}>
+                      <input
+                        type="checkbox"
+                        checked={nightPauseEnabled}
+                        onChange={(e) => {
+                          const val = e.target.checked;
+                          setNightPauseEnabled(val);
+                          updateOperatingHoursConfig(val, nightStart, nightEnd);
+                        }}
+                        style={{ cursor: 'pointer' }}
+                      />
+                      <strong>{nightPauseEnabled ? 'Ativada' : 'Desativada'}</strong>
+                    </label>
+                  </div>
+
+                  {nightPauseEnabled ? (
+                    <div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 8 }}>
+                        <div>
+                          <label style={{ fontSize: 11, color: '#9ca3af', display: 'block', marginBottom: 4 }}>
+                            🌙 Pausar à noite:
+                          </label>
+                          <input
+                            type="time"
+                            value={nightEnd}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setNightEnd(val);
+                              updateOperatingHoursConfig(nightPauseEnabled, nightStart, val);
+                            }}
+                            style={{ width: '100%', background: '#111827', border: '1px solid #4b5563', color: '#ffe600', borderRadius: 6, padding: '6px 10px', fontSize: 12, fontWeight: 700 }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 11, color: '#9ca3af', display: 'block', marginBottom: 4 }}>
+                            ☀️ Retomar pela manhã:
+                          </label>
+                          <input
+                            type="time"
+                            value={nightStart}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setNightStart(val);
+                              updateOperatingHoursConfig(nightPauseEnabled, val, nightEnd);
+                            }}
+                            style={{ width: '100%', background: '#111827', border: '1px solid #4b5563', color: '#ffe600', borderRadius: 6, padding: '6px 10px', fontSize: 12, fontWeight: 700 }}
+                          />
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 11, color: '#9ca3af', display: 'block', lineHeight: 1.3 }}>
+                        💤 O robô suspende envios às <strong>{nightEnd}</strong> e volta a postar sozinho às <strong>{nightStart}</strong> sem incomodar o grupo na madrugada.
+                      </span>
+                    </div>
+                  ) : (
+                    <span style={{ fontSize: 11, color: '#f59e0b', display: 'block' }}>
+                      ⚠️ O robô funcionará 24h sem interrupção.
+                    </span>
+                  )}
+                </div>
+
                 {/* BOTÃO DE ENVIAR TESTE */}
                 <div style={{ paddingTop: 8, borderTop: '1px dashed #374151' }}>
                   <button
@@ -913,20 +1033,55 @@ export default function App() {
                   <Radio size={18} /> Central de Controle do Robô
                 </h3>
 
+                {/* BLINDAGEM ANTI-BOT */}
+                <div style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: '#10b981', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                    <ShieldCheck size={16} /> Blindagem Anti-Bot & Humanização Ativa
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <div style={{ fontSize: 11, color: '#d1fae5', display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <Check size={13} color="#10b981" /> "Digitando..." real (3 a 6s)
+                    </div>
+                    <div style={{ fontSize: 11, color: '#d1fae5', display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <Check size={13} color="#10b981" /> Spintax (textos únicos)
+                    </div>
+                    <div style={{ fontSize: 11, color: '#d1fae5', display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <Check size={13} color="#10b981" /> Jitter orgânico de segundos
+                    </div>
+                    <div style={{ fontSize: 11, color: '#d1fae5', display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <Check size={13} color="#10b981" /> Leitura prévia (sendSeen)
+                    </div>
+                  </div>
+                </div>
+
                 <div style={{ background: '#1f2937', borderRadius: 10, padding: 16, marginBottom: 16 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <span style={{ fontSize: 12, color: '#9ca3af', fontWeight: 600 }}>Status do Robô:</span>
-                    <span style={{ fontWeight: 800, fontSize: 13, color: isAutoPosting ? '#10b981' : '#f43f5e' }}>
-                      {isAutoPosting ? '🟢 ATIVO (Postando no grupo)' : '🔴 PAUSADO'}
+                    <span style={{ fontWeight: 800, fontSize: 13, color: isAutoPosting ? (isNightSleep ? '#a78bfa' : '#10b981') : '#f43f5e' }}>
+                      {isAutoPosting ? (isNightSleep ? `🌙 REPOUSO NOTURNO (Dormindo até ${nextWakeFormatted})` : '🟢 ATIVO (Postando no grupo)') : '🔴 PAUSADO'}
                     </span>
                   </div>
 
                   {isAutoPosting && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, borderTop: '1px solid #374151' }}>
-                      <span style={{ fontSize: 12, color: '#9ca3af', fontWeight: 600 }}>Próximo disparo em:</span>
-                      <span style={{ fontWeight: 900, fontSize: 20, color: '#ffe600', fontFamily: 'monospace' }}>
+                      <span style={{ fontSize: 12, color: '#9ca3af', fontWeight: 600 }}>
+                        {isNightSleep ? 'Despertando em:' : 'Próximo disparo em:'}
+                      </span>
+                      <span style={{ fontWeight: 900, fontSize: 20, color: isNightSleep ? '#a78bfa' : '#ffe600', fontFamily: 'monospace' }}>
                         {countdown || 'Calculando...'}
                       </span>
+                    </div>
+                  )}
+
+                  {isAutoPosting && isNightSleep && (
+                    <div style={{ background: 'rgba(99, 102, 241, 0.15)', border: '1px solid #6366f1', borderRadius: 8, padding: '10px 14px', marginTop: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <Moon size={20} color="#818cf8" />
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: '#e0e7ff' }}>Modo Repouso Noturno Ativo 💤</div>
+                        <div style={{ fontSize: 11, color: '#c7d2fe', marginTop: 2 }}>
+                          Disparos suspensos para respeitar a noite do grupo ({nightEnd} às {nightStart}). O bot acorda e volta a postar automaticamente às <strong>{nextWakeFormatted}</strong>.
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
