@@ -354,17 +354,21 @@ function initWhatsAppClient() {
     puppeteer: {
       headless: true,
       executablePath: execPath,
+      protocolTimeout: 180000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-gpu',
         '--disable-dev-shm-usage',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
         '--disable-features=IsolateOrigins,site-per-process',
         '--disable-site-isolation-trials',
         '--no-first-run',
         '--no-zygote',
         '--disable-extensions',
-        '--js-flags=--max-old-space-size=512'
+        '--js-flags=--max-old-space-size=1024'
       ],
     },
   });
@@ -531,76 +535,44 @@ function initWhatsAppClient() {
   });
 }
 
-// Busca grupos com tentativas e recuperação de frame
+// Busca grupos de forma ultra rápida e leve diretamente do Store do Chromium (sem serializar conversas pesadas)
 async function safeGetGroups() {
   if (!waClient || waStatus !== 'ready') return cachedGroups;
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      // 1. Tenta via getChats() do whatsapp-web.js
-      const chats = await waClient.getChats();
-      if (chats && Array.isArray(chats)) {
-        const groups = chats
-          .filter(c => c && (
-            c.isGroup === true ||
-            (c.id?._serialized && c.id._serialized.endsWith('@g.us')) ||
-            (c.id?.server === 'g.us') ||
-            (typeof c.id === 'string' && c.id.endsWith('@g.us'))
-          ))
-          .map(g => ({
-            id: g.id?._serialized || (typeof g.id === 'string' ? g.id : (g.id?.user ? g.id.user + '@g.us' : '')),
-            name: g.formattedTitle || g.name || g.contact?.name || 'Grupo sem nome',
-          }))
-          .filter(g => g.id);
-
-        if (groups.length > 0) {
-          const map = new Map();
-          cachedGroups.forEach(item => map.set(item.id, item));
-          groups.forEach(item => map.set(item.id, item));
-          cachedGroups = Array.from(map.values());
-          return cachedGroups;
-        }
-      }
-
-      // 2. Fallback direto via Store do Chromium caso getChats() filtre ou não tenha hidratado
-      if (waClient.pupPage) {
-        const storeGroups = await waClient.pupPage.evaluate(() => {
-          try {
-            const collections = window.require('WAWebCollections');
-            const chatModels = collections?.Chat?.getModelsArray?.() || [];
-            const result = [];
-            for (const c of chatModels) {
-              const id = c.id?._serialized || (c.id ? c.id.toString() : '');
-              if (id.endsWith('@g.us') || c.isGroup || c.id?.server === 'g.us') {
-                result.push({
-                  id: id,
-                  name: c.formattedTitle || c.name || 'Grupo sem nome'
-                });
-              }
+  try {
+    if (waClient.pupPage) {
+      const storeGroups = await withTimeout(waClient.pupPage.evaluate(() => {
+        try {
+          const collections = window.require('WAWebCollections');
+          const chatModels = collections?.Chat?.getModelsArray?.() || [];
+          const result = [];
+          for (const c of chatModels) {
+            const id = c.id?._serialized || (c.id ? c.id.toString() : '');
+            if (id.endsWith('@g.us') || c.isGroup || c.id?.server === 'g.us') {
+              result.push({
+                id: id,
+                name: c.formattedTitle || c.name || 'Grupo sem nome'
+              });
             }
-            return result;
-          } catch (e) {
-            return [];
           }
-        });
-
-        if (storeGroups && storeGroups.length > 0) {
-          const map = new Map();
-          cachedGroups.forEach(item => map.set(item.id, item));
-          storeGroups.forEach(item => map.set(item.id, item));
-          cachedGroups = Array.from(map.values());
-          return cachedGroups;
+          return result;
+        } catch (e) {
+          return [];
         }
-      }
+      }), 10000, 'Timeout ao ler grupos do Store');
 
-      if (attempt < 3) await new Promise(r => setTimeout(r, 1500));
-    } catch (err) {
-      console.warn(`[Tentativa ${attempt}/3 obter grupos]:`, err.message);
-      if (attempt < 3) {
-        await new Promise(r => setTimeout(r, 2000));
+      if (storeGroups && storeGroups.length > 0) {
+        const map = new Map();
+        cachedGroups.forEach(item => map.set(item.id, item));
+        storeGroups.forEach(item => map.set(item.id, item));
+        cachedGroups = Array.from(map.values());
+        return cachedGroups;
       }
     }
+  } catch (err) {
+    console.warn('Aviso ao sincronizar lista de grupos:', err.message);
   }
+
   return cachedGroups;
 }
 
@@ -1099,6 +1071,15 @@ app.get('/api/whatsapp/groups', async (req, res) => {
       success: true,
       groups: cachedGroups,
       message: 'WhatsApp ainda conectando e sincronizando conversas...'
+    });
+  }
+
+  // Se já temos grupos em cache e não foi pedido reload forçado, responde instantaneamente
+  if (cachedGroups.length > 0 && req.query.force !== 'true') {
+    return res.json({
+      success: true,
+      groups: cachedGroups,
+      total: cachedGroups.length
     });
   }
 
