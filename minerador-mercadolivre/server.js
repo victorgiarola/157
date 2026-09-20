@@ -819,6 +819,14 @@ async function formatAffiliateMessage(product, style, tag) {
   return `🚨 *OFERTA RELÂMPAGO NO MERCADO LIVRE!* 🚨\n\n🔥 *${shortTitle}*\n⭐ ${product.salesCount ? `*${product.salesCount}* • ` : ''}Top Avaliado (${product.rating || '4.8'}★)\n\n❌ De: ${oldPriceStr}\n✅ Por apenas: *${product.priceFormatted}* (*${discountStr}*!)\n${frete} ${seloFull}\n\n👇 *Aproveite a promoção aqui:*\n🔗 ${link}\n\n⚠️ _Estoque limitado, corre antes que o preço suba!_`;
 }
 
+function withTimeout(promise, ms = 35000, errorMsg = 'Operação expirou (timeout)') {
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(errorMsg)), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+}
+
 // Envia oferta com foto e fallback inteligente para texto formatado caso o WhatsApp Web recuse a mídia
 async function sendProductOffer(chatId, message, media) {
   if (!waClient || waStatus !== 'ready') {
@@ -828,34 +836,39 @@ async function sendProductOffer(chatId, message, media) {
   // Assegura blindagem de getters antes de preparar o envio
   if (waClient.pupPage) {
     try {
-      await waClient.pupPage.evaluate(() => {
+      await withTimeout(waClient.pupPage.evaluate(() => {
         if (typeof window.WWebJS?.protectGetters === 'function') {
           window.WWebJS.protectGetters();
         }
-      });
+      }), 5000, 'Getter shield timeout');
     } catch (e) {}
   }
 
-  // 1. Tenta envio com foto do produto primeiro
+  // 1. Tenta envio com foto do produto primeiro com timeout seguro
   if (media) {
     try {
       console.log(`📸 Enviando foto oficial do produto (${media.mimetype}, ~${Math.round(media.data.length * 0.75 / 1024)} KB) para ${chatId}...`);
-      await waClient.sendMessage(chatId, media, { caption: message });
+      await withTimeout(waClient.sendMessage(chatId, media, { caption: message }), 35000, 'Timeout ao enviar foto pelo WhatsApp Web');
       console.log(`🎉 Oferta com FOTO enviada com sucesso para ${chatId}!`);
       return { success: true, hasImage: true };
     } catch (mediaErr) {
-      console.warn(`⚠️ Envio de foto encontrou erro no WhatsApp Web: ${mediaErr.message}`);
+      console.warn(`⚠️ Envio de foto encontrou erro/timeout no WhatsApp Web: ${mediaErr.message}`);
       console.log(`📝 Entregando oferta com link oficial do Mercado Livre e preview enriquecido...`);
     }
   } else {
     console.warn(`⚠️ Mídia não disponível para este produto. Entregando texto com linkPreview.`);
   }
 
-  // 2. Envio do texto formatado com linkPreview ativo (renderiza o card com foto e título oficial do Mercado Livre)
+  // 2. Envio do texto formatado com linkPreview ativo
   try {
-    await waClient.sendMessage(chatId, message, { linkPreview: true });
+    await withTimeout(waClient.sendMessage(chatId, message, { linkPreview: true }), 25000, 'Timeout ao enviar mensagem com linkPreview');
   } catch (e) {
-    await waClient.sendMessage(chatId, message);
+    try {
+      await withTimeout(waClient.sendMessage(chatId, message), 15000, 'Timeout ao enviar mensagem de texto simples');
+    } catch (errFinal) {
+      console.error('❌ Falha total ao entregar mensagem no WhatsApp:', errFinal.message);
+      throw errFinal;
+    }
   }
   return { success: true, hasImage: false };
 }
@@ -897,21 +910,44 @@ async function getNextUnpostedDeal(minDiscount = 20) {
     'https://www.mercadolivre.com.br/ofertas?page=3',
     'https://www.mercadolivre.com.br/ofertas?page=4',
     'https://www.mercadolivre.com.br/ofertas?page=5',
+    'https://www.mercadolivre.com.br/ofertas?page=6',
+    'https://www.mercadolivre.com.br/ofertas?page=7',
+    'https://www.mercadolivre.com.br/ofertas?page=8',
     'https://www.mercadolivre.com.br/mais-vendidos/MLB1051', // Celulares
     'https://www.mercadolivre.com.br/mais-vendidos/MLB1648', // Informática
     'https://www.mercadolivre.com.br/mais-vendidos/MLB1000', // Eletrônicos
     'https://www.mercadolivre.com.br/mais-vendidos/MLB1574', // Casa e Eletrodomésticos
     'https://www.mercadolivre.com.br/mais-vendidos/MLB1246', // Beleza
     'https://www.mercadolivre.com.br/mais-vendidos/MLB1144', // Games
+    'https://www.mercadolivre.com.br/mais-vendidos/MLB263532', // Ferramentas
+    'https://www.mercadolivre.com.br/mais-vendidos/MLB1276', // Esportes
   ];
 
+  // 1. Primeira passada: busca produtos inéditos com o desconto mínimo pedido
   for (const src of sources) {
+    try {
+      const isDeals = src.includes('/ofertas');
+      const deals = isDeals ? await scrapeDealsPage(src) : await scrapeBestSellers(src);
+      for (const d of deals) {
+        if (!d || !d.img) continue;
+        if (isProductAlreadyPosted(d)) continue;
+        const discountNum = parseInt((d.discount || '').replace(/\D/g, '')) || 0;
+        if (discountNum >= minDiscount || !isDeals) {
+          return d;
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 2. Fallback de resgate: se todos os produtos acima do desconto já foram postados, busca qualquer produto inédito com 15% ou mais
+  for (const src of sources.slice(0, 5)) {
     try {
       const deals = await scrapeDealsPage(src);
       for (const d of deals) {
+        if (!d || !d.img) continue;
         if (isProductAlreadyPosted(d)) continue;
         const discountNum = parseInt((d.discount || '').replace(/\D/g, '')) || 0;
-        if (discountNum >= minDiscount) {
+        if (discountNum >= 15) {
           return d;
         }
       }
@@ -928,8 +964,8 @@ async function dispatchNextDeal() {
   try {
     const targetChat = await resolveTargetChat(autoPostConfig.targetGroupId, autoPostConfig.targetGroupName);
     if (!targetChat) {
-      console.warn(`⚠️ Grupo de destino "${autoPostConfig.targetGroupName}" não encontrado. Tentando novamente.`);
-      scheduleNextRun();
+      console.warn(`⚠️ Grupo de destino "${autoPostConfig.targetGroupName}" não encontrado. Tentando novamente em 2 minutos.`);
+      scheduleNextRun(2);
       return;
     }
 
@@ -957,24 +993,37 @@ async function dispatchNextDeal() {
       if (postLogs.length > 50) postLogs.pop();
 
       console.log(`🚀 [Auto-Post] Oferta enviada para "${targetChat.name}": ${candidate.title} (${result.hasImage ? 'com foto' : 'texto formatado'})`);
+      scheduleNextRun();
     } else {
-      console.log('ℹ️ [Auto-Post] Todas as ofertas mineradas já foram enviadas. Tentando novas buscas...');
+      console.log('ℹ️ [Auto-Post] Nenhuma oferta inédita no filtro atual. Repetindo varredura em 2 minutos...');
+      postLogs.unshift({
+        id: Date.now(),
+        title: 'Buscando novas ofertas no Mercado Livre...',
+        price: '-',
+        discount: '-',
+        time: new Date().toLocaleTimeString('pt-BR'),
+        status: 'Buscando novos produtos 🔄'
+      });
+      if (postLogs.length > 50) postLogs.pop();
+      scheduleNextRun(2);
     }
   } catch (err) {
     console.error('Erro ao disparar oferta automática:', err.message);
+    scheduleNextRun(3);
   }
-
-  scheduleNextRun();
 }
 
-function scheduleNextRun() {
+function scheduleNextRun(customMinutes = null) {
   if (!isAutoPosting) return;
 
   const delays = (autoPostConfig.delays && autoPostConfig.delays.length > 0)
     ? autoPostConfig.delays
     : [3, 5, 7, 9, 12, 15, 25];
 
-  const randomMinutes = delays[Math.floor(Math.random() * delays.length)];
+  const randomMinutes = (customMinutes !== null && customMinutes > 0)
+    ? customMinutes
+    : delays[Math.floor(Math.random() * delays.length)];
+
   const delayMs = randomMinutes * 60 * 1000;
 
   nextPostTimestamp = Date.now() + delayMs;
